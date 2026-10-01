@@ -3,6 +3,8 @@ launched as user 1 (RSTUDIO_USER1), each named AUTO_SESSION_U1_<N> so a
 concurrent user1/user2 run never collides (see tests/test_two_user_login.py).
 Every test force-quits the sessions it created.
 """
+import time
+
 import pytest
 
 from common.config import env
@@ -63,6 +65,35 @@ def test_create_multiple_sessions_and_run_r_scripts_concurrently_user1(page, con
         page, context, home_url, before_ids, session_names,
         LAUNCH_ATTEMPTS, SOURCE_COMMAND, SCRIPT_TIMEOUT_MS, MONITOR_POLL_INTERVAL_S, LABEL,
     )
+    assert not unfinished, (
+        "sessions whose script did not finish within %dms: %s" % (SCRIPT_TIMEOUT_MS, unfinished)
+    )
+
+
+def test_create_multiple_sessions_and_run_r_scripts_concurrently_total_time_user1(page, context):
+    """Same scenario as
+    test_create_multiple_sessions_and_run_r_scripts_concurrently_user1, but
+    also captures the wall-clock time for the complete run: login, launching
+    SESSION_COUNT sessions, running SOURCE_COMMAND concurrently in every tab
+    and cleaning up. The total is printed even if the run fails.
+    """
+    started = time.time()
+    unfinished = None
+    try:
+        home_url = login_to_posit_workbench(page, user=1)
+        before_ids = row_ids(page)
+        session_names = next_session_names(page, SESSION_NAME_PREFIX, SESSION_COUNT, home_url=home_url)
+
+        unfinished = run_command_concurrently_in_tabs_scenario(
+            page, context, home_url, before_ids, session_names,
+            LAUNCH_ATTEMPTS, SOURCE_COMMAND, SCRIPT_TIMEOUT_MS, MONITOR_POLL_INTERVAL_S, LABEL,
+        )
+    finally:
+        print(
+            "\n[rstudio-local] %s: complete run of %d sessions with %r took %.2fs (%s)"
+            % (LABEL, SESSION_COUNT, SOURCE_COMMAND, time.time() - started,
+               "passed" if unfinished == [] else "failed")
+        )
     assert not unfinished, (
         "sessions whose script did not finish within %dms: %s" % (SCRIPT_TIMEOUT_MS, unfinished)
     )

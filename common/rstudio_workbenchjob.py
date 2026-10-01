@@ -1,13 +1,22 @@
 """Workbench Jobs automation: launch a session, open the Workbench Jobs pane,
 and start an R script as a Workbench job via the Start Workbench Job dialog.
+Also multi-session flows that start a job (or source a script in the
+console) in each session's own tab and close the tab straight away.
 """
 import posixpath
 import time
 from collections import namedtuple
 
 from common import locators
-from common.rstudio_console_commands import r_string, run_console_command
-from common.rstudio_session_helper import launch_new_session
+from common.rstudio_console_commands import (
+    get_file_size,
+    is_console_command_done,
+    r_string,
+    run_console_command,
+    submit_console_command,
+)
+from common.rstudio_session_helper import launch_new_session, open_existing_session
+from common.session_actions import create_folder, delete_file, set_session_working_directory
 
 DEFAULT_WORKBENCH_JOB_SCRIPT = "/fsx/data/sample_run_sleep.R"
 
@@ -219,3 +228,185 @@ def run_workbench_job(page, home_url, script_path=DEFAULT_WORKBENCH_JOB_SCRIPT, 
         "Workbench job %r ended as %s" % (job_name, status)
     )
     return WorkbenchJobRun(session_launch, job_name, submit_elapsed, elapsed, status)
+
+
+def launch_sessions_and_start_jobs(context, home_url, session_count, script_path=DEFAULT_WORKBENCH_JOB_SCRIPT):
+    """Launch `session_count` new sessions, each in its own tab, start
+    `script_path` as a Workbench job in each and close the tab as soon as the
+    job has started. Returns the names of the sessions launched, including
+    one whose job failed to start.
+    """
+    session_names = []
+    for _ in range(session_count):
+        tab = context.new_page()
+        try:
+            launch = launch_new_session(tab, home_url)
+            session_names.append(launch.session_name)
+            job_name, submit_elapsed = start_workbench_job(tab, script_path)
+            print(
+                "\n[rstudio-local] session %s launched in %.2fs, job %s started in %.2fs (status: %s)"
+                % (launch.session_name, launch.elapsed_s, job_name, submit_elapsed,
+                   get_job_status(tab, job_name))
+            )
+        finally:
+            tab.close()
+    return session_names
+
+
+def reopen_sessions_and_stop_jobs(page, home_url, session_names, job_name):
+    """Reopen each session in `page` and stop a running `job_name` job.
+    Returns a list of failure messages (empty if every job was stopped).
+    """
+    failures = []
+    for session_name in session_names:
+        try:
+            reopen = open_existing_session(page, home_url, session_name)
+            stopped = stop_workbench_job(page, job_name)
+            print(
+                "\n[rstudio-local] session %s reopened in %.2fs, %s job %s (status: %s)"
+                % (session_name, reopen.elapsed_s, job_name,
+                   "stopped" if stopped else "was not running", get_job_status(page, job_name))
+            )
+            if not stopped:
+                failures.append("%s: no running %s job to stop" % (session_name, job_name))
+        except Exception as exc:
+            failures.append("%s: %s" % (session_name, exc))
+    return failures
+
+
+def launch_sessions_and_source_script(context, home_url, session_count, script_path=DEFAULT_WORKBENCH_JOB_SCRIPT,
+                                      working_dir=None):
+    """Launch `session_count` new sessions, each in its own tab, setwd to
+    `working_dir` (default RSTUDIO_WORKING_DIR; skipped if neither is set),
+    source `script_path` in the console and close the tab without waiting for
+    the script to finish.
+    """
+    source_command = "source(%s)" % r_string(script_path)
+    for _ in range(session_count):
+        tab = context.new_page()
+        try:
+            launch = launch_new_session(tab, home_url)
+            set_session_working_directory(tab, path=working_dir)
+            submit_console_command(tab, source_command)
+            # The console echoes the command once R has accepted it.
+            tab.locator(locators.CONSOLE_OUTPUT_SELECTOR).get_by_text(source_command).first.wait_for(
+                state="visible", timeout=10000
+            )
+            print(
+                "\n[rstudio-local] session %s launched in %.2fs, %s submitted in the console"
+                % (launch.session_name, launch.elapsed_s, source_command)
+            )
+        finally:
+            tab.close()
+
+
+def _check_output_file(page, record, output_path, delete=False, remove_dir=None):
+    """Set record["status"] to an error unless `output_path` exists. With
+    `delete`, then delete it, and remove the folder `remove_dir` (when given)
+    if that leaves it empty.
+    """
+    try:
+        size = get_file_size(page, output_path)
+    except Exception as exc:
+        record["status"] = "could not check %s: %s" % (output_path, exc)
+        return
+    if size is None:
+        record["status"] = "%s was not created" % output_path
+    else:
+        print("\n[rstudio-local] session %s: %s is %d bytes" % (record["session_name"], output_path, size))
+    if not delete or size is None:
+        return
+    try:
+        if not delete_file(page, output_path):
+            record["status"] = "could not delete %s" % output_path
+            return
+        if remove_dir:
+            run_console_command(
+                page,
+                "local({d <- %s; if (length(list.files(d, all.files=TRUE, no..=TRUE)) == 0) "
+                "unlink(d, recursive=TRUE)})" % r_string(remove_dir),
+                timeout_ms=10000,
+            )
+        print("\n[rstudio-local] session %s: deleted %s" % (record["session_name"], output_path))
+    except Exception as exc:
+        record["status"] = "could not delete %s: %s" % (output_path, exc)
+
+
+def launch_sessions_and_run_script(context, home_url, session_count, script_path=DEFAULT_WORKBENCH_JOB_SCRIPT,
+                                   working_dir=None, timeout_ms=1800000, poll_interval_ms=500, output_path=None,
+                                   per_session_dir=False, delete_output=False):
+    """Launch `session_count` new sessions, each in its own tab, and setwd to
+    `working_dir` (default RSTUDIO_WORKING_DIR; skipped if neither is set).
+    With per_session_dir, each session instead gets its own
+    `working_dir`/<session name> folder (created if missing), so sessions
+    writing the same relative file don't overwrite each other.
+    Once every session is up, source `script_path` in each console and poll
+    the tabs in turn until every run has finished or timed out, so the
+    scripts run concurrently. With `output_path` (relative paths resolve
+    against the session's working directory), a run only counts as "ok" if
+    that file exists once the script has finished; with delete_output it is
+    then deleted (and the per-session folder too, if left empty). Tabs are
+    closed before returning.
+
+    Returns one record per session in the common.script_timings format
+    ("session_name", "started", "ended", "status"), status "ok", "timed out"
+    or the error.
+    """
+    if per_session_dir and not working_dir:
+        raise ValueError("per_session_dir needs a working_dir")
+    source_command = "source(%s)" % r_string(script_path)
+    tabs, runs, session_dirs, pending = [], [], [], []
+    try:
+        for i in range(session_count):
+            tab = context.new_page()
+            tabs.append(tab)
+            record = {"session_name": "session %d" % (i + 1), "started": None, "ended": None, "status": "not run"}
+            runs.append(record)
+            session_dirs.append(None)
+            try:
+                launch = launch_new_session(tab, home_url)
+                record["session_name"] = launch.session_name
+                if per_session_dir:
+                    session_dirs[i] = posixpath.join(working_dir, launch.session_name)
+                    create_folder(tab, session_dirs[i])
+                set_session_working_directory(tab, path=session_dirs[i] or working_dir)
+                print("\n[rstudio-local] session %s launched in %.2fs" % (launch.session_name, launch.elapsed_s))
+            except Exception as exc:
+                record["status"] = "launch failed: %s" % exc
+
+        for tab, record, session_dir in zip(tabs, runs, session_dirs):
+            if record["status"] != "not run":
+                continue
+            try:
+                marker, record["started"] = submit_console_command(tab, source_command)
+                pending.append((tab, marker, record, session_dir))
+            except Exception as exc:
+                record["status"] = "submit failed: %s" % exc
+
+        while pending:
+            for item in list(pending):
+                tab, marker, record, session_dir = item
+                try:
+                    done = is_console_command_done(tab, marker)
+                except Exception as exc:
+                    record["status"] = str(exc)
+                    pending.remove(item)
+                    continue
+                if done:
+                    record["ended"], record["status"] = time.time(), "ok"
+                    pending.remove(item)
+                    print(
+                        "\n[rstudio-local] session %s: %s took %.2fs"
+                        % (record["session_name"], source_command, record["ended"] - record["started"])
+                    )
+                    if output_path:
+                        _check_output_file(tab, record, output_path, delete=delete_output, remove_dir=session_dir)
+                elif time.time() - record["started"] >= timeout_ms / 1000.0:
+                    record["status"] = "timed out"
+                    pending.remove(item)
+            if pending:
+                pending[0][0].wait_for_timeout(poll_interval_ms)
+    finally:
+        for tab in tabs:
+            tab.close()
+    return runs
