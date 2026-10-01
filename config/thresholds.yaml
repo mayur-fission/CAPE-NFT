@@ -1,0 +1,46 @@
+# PHASE 00 GATE - load and performance subset
+#
+# Every value is null because the acceptance criteria never defined it.
+# The suite skips any scenario whose threshold is still null, so a run cannot
+# quietly produce a green result against an invented number.
+#
+# Keys map to open questions in the workbook (Open Questions sheet).
+
+# OQ-01 - AC1: acceptable completion time for the high-throughput workload
+batch_job_max_seconds: null
+
+# OQ-02 - AC1: tolerable interactive degradation while batch runs.
+# This is the number POS-01 and POS-02 are judged on. "Without impacting" is
+# absolute in the AC and unachievable in practice, so a figure is required.
+interactive_p95_degradation_pct: null
+
+# OQ-03 - AC2: acceptable run-to-run variance for identical jobs
+job_runtime_variance_pct: null
+job_repeat_count: 15
+
+# OQ-04 - AC7: how long the 200-session run must hold
+session_soak_seconds: null
+
+# OQ-05 - AC3: the exhaustive list of supported write paths
+access_methods: []          # e.g. [ui, api, smb, cli]
+
+# OQ-07 - AC3: what "immediately" means for cross-user visibility
+write_visibility_max_seconds: null
+
+# OQ-08 - AC6: which actions count as non-WIP
+non_wip_actions: []         # e.g. [create_artefact, copy, export, archive]
+
+# OQ-14 - scales the stress and spike profiles. Without it they are guesswork.
+peak_concurrent_sessions: null
+
+# --- fixed by the acceptance criteria, not open ---
+target_concurrent_sessions: 200
+non_wip_max_seconds: 7200   # the 2h in AC6
+project_size_gb: 250
+project_file_count: 150000
+handoff_load_p95_seconds: 2.0
+
+# --- endurance leak detection ---
+# Final-hour p95 must stay within this of hour-one p95, and resource series
+# must not trend upward across the soak.
+endurance_drift_pct: 10

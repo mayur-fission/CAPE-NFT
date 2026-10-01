@@ -1,0 +1,3 @@
+Label,# Samples,Average,Median,90% Line,95% Line,99% Line,Min,Max,Error %,Throughput,Received KB/sec,Std. Dev.
+Launch RStudio Pro Session 1,1,18.721,18.721,18.721,18.721,18.721,18.721,18.721,0.0,0.053,540.494,0.0
+TOTAL,1,18.721,18.721,18.721,18.721,18.721,18.721,18.721,0.0,0.046,460.649,0.0

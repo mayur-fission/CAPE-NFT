@@ -1,0 +1,11 @@
+.venv/
+vendor/
+__pycache__/
+*.pyc
+.env
+evidence/locust/*
+evidence/junit/*
+evidence/pack_*
+evidence/allure-results/*
+evidence/allure-report/*
+!evidence/.gitkeep

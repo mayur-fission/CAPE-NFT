@@ -1,0 +1,22 @@
+locust==2.31.8
+pytest==8.3.3
+requests==2.32.3
+openpyxl==3.1.5
+PyYAML==6.0.2
+boto3==1.35.36
+
+# local-only: tests/test_rstudio_sessions.py (RStudio Workbench has no
+# documented public REST endpoint for session creation, so this drives a
+# real browser instead). Run `playwright install chromium` after installing.
+playwright==1.47.0
+pytest-playwright==0.5.2
+python-dotenv==1.0.1
+allure-pytest==2.13.5
+
+# metrics capture for the RStudio perf tests (common/otel_metrics.py) and
+# the local Prometheus/Grafana stack it feeds (common/observability.py)
+opentelemetry-api==1.44.0
+opentelemetry-sdk==1.44.0
+opentelemetry-exporter-otlp-proto-http==1.44.0
+opentelemetry-exporter-prometheus==0.65b0
+# observability.py also uses requests and PyYAML, both already pinned above
