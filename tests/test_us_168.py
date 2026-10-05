@@ -9,9 +9,6 @@ from common.rstudio_session_helper import row_ids
 from common.rstudio_workbenchjob import (
     DEFAULT_WORKBENCH_JOB_SCRIPT,
     launch_sessions_and_run_script,
-    launch_sessions_and_source_script,
-    launch_sessions_and_start_jobs,
-    reopen_sessions_and_stop_jobs,
 )
 from common.script_timings import script_timings_csv_path, write_script_timings_csv
 from common.session_actions import login_to_posit_workbench
@@ -29,48 +26,6 @@ TEST_DURATION_SECONDS = float(env("RSTUDIO_WORKBENCH_JOB_TEST_DURATION_SECONDS",
 OUTPUT_DIR = env("HIGH_THROUGHPUT_JOB_OUTPUT_DIR", "/fsx/data/batch_mayur")
 OUTPUT_FILE_NAME = "generated_data.csv"
 SCRIPT_TIMEOUT_MS = int(env("HIGH_THROUGHPUT_JOB_TIMEOUT_MS", "1800000"))
-
-@pytest.mark.skip()
-def test_create_sessions_run_workbench_job_close_tab(context):
-    home_page = context.new_page()
-    home_url = login_to_posit_workbench(home_page)
-    before_ids = row_ids(home_page)
-
-    try:
-        session_names = launch_sessions_and_start_jobs(context, home_url, SESSION_COUNT, HTP_SCRIPT_PATH)
-
-        print("\n[rstudio-local] all tabs closed, waiting %.0fs before reopening sessions" % TEST_DURATION_SECONDS)
-        home_page.wait_for_timeout(TEST_DURATION_SECONDS * 1000)
-
-        failures = reopen_sessions_and_stop_jobs(home_page, home_url, session_names, JOB_NAME)
-        assert not failures, "reopen/stop failed after %.0fs: %s" % (TEST_DURATION_SECONDS, failures)
-    finally:
-        cleanup_and_verify_sessions(home_page, home_url, before_ids)
-
-
-def test_create_sessions_run_high_through_put_job_in_console_close_tab(context):
-    """Launch RSTUDIO_SESSION_COUNT sessions, each in its own tab, source the
-    script in the console and close the tab without waiting for it (the
-    default script loops forever). After
-    RSTUDIO_WORKBENCH_JOB_TEST_DURATION_SECONDS, quit every session created,
-    which ends the script.
-    """
-    home_page = context.new_page()
-    home_url = login_to_posit_workbench(home_page)
-    before_ids = row_ids(home_page)
-
-    try:
-        launch_sessions_and_source_script(context, home_url, SESSION_COUNT, HTP_SCRIPT_PATH)
-
-        print("\n[rstudio-local] all tabs closed, waiting %.0fs before quitting sessions" % TEST_DURATION_SECONDS)
-        home_page.wait_for_timeout(TEST_DURATION_SECONDS * 1000)
-
-        started = time.time()
-        quit_ids = cleanup_and_verify_sessions(home_page, home_url, before_ids)
-        print("\n[rstudio-local] quit %d session(s) in %.2fs" % (len(quit_ids), time.time() - started))
-    finally:
-        # Only does anything if the test failed before the quit above.
-        cleanup_and_verify_sessions(home_page, home_url, before_ids)
 
 
 def _run_script_in_tabs_and_time(context, session_count, label, per_session_dir=False):
@@ -115,15 +70,8 @@ def _run_script_in_tabs_and_time(context, session_count, label, per_session_dir=
                 raise
             print("\n[rstudio-local] %s: cleanup also failed: %s" % (label, cleanup_exc))
 
-@pytest.mark.skip()
-def test_create_session_run_high_throughput_script_in_console_timed(context):
-    """One session in its own tab: setwd to OUTPUT_DIR, source
-    HTP_SCRIPT_PATH in the console and capture the time it takes to finish.
-    The script saves OUTPUT_DIR/generated_data.csv.
-    """
-    _run_script_in_tabs_and_time(context, 1, "high_throughput_single_session")
 
-@pytest.mark.skip()
+
 def test_create_sessions_run_high_throughput_script_in_console_timed(context):
     """RSTUDIO_SESSION_COUNT sessions, each in its own tab: setwd to
     OUTPUT_DIR/<session name>, source HTP_SCRIPT_PATH in every console

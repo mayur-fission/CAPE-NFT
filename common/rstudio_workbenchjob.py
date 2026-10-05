@@ -340,7 +340,8 @@ def launch_sessions_and_run_script(context, home_url, session_count, script_path
     With per_session_dir, each session instead gets its own
     `working_dir`/<session name> folder (created if missing), so sessions
     writing the same relative file don't overwrite each other.
-    Once every session is up, source `script_path` in each console and poll
+    Once every session is up, source `script_path` in each console (into a
+    fresh environment, not the global one) and poll
     the tabs in turn until every run has finished or timed out, so the
     scripts run concurrently. With `output_path` (relative paths resolve
     against the session's working directory), a run only counts as "ok" if
@@ -354,7 +355,11 @@ def launch_sessions_and_run_script(context, home_url, session_count, script_path
     """
     if per_session_dir and not working_dir:
         raise ValueError("per_session_dir needs a working_dir")
-    source_command = "source(%s)" % r_string(script_path)
+    # Source into a throwaway environment: scripts that leave very many
+    # objects in the global environment (sample_100mb.R) keep R busy for
+    # minutes refreshing RStudio's Environment pane after they return, so
+    # the output-file check below never gets a reply.
+    source_command = "source(%s, local=new.env())" % r_string(script_path)
     tabs, runs, session_dirs, pending = [], [], [], []
     try:
         for i in range(session_count):
