@@ -1,67 +1,71 @@
-"""Open the sessions already created through the Workbench API
-(AUTO_API_SESSION_105 .. AUTO_API_SESSION_109 by default; see
-API_SESSION_START/API_SESSION_END), each in its own tab, and source the
-high-throughput R script in every console concurrently, timing each run.
-
-The sessions are not quit afterwards - they were created outside this test
-and are reused - only the tabs are closed.
+"""Reuse RStudio sessions that already exist on Workbench: open each in its own
+tab and source an R script in every console concurrently, timing each run.
+Nothing is created; the sessions are left running and only their tabs are
+closed.
 """
-import time
-
 import pytest
 
+from common.api_helper import read_session_names, session_ids_csv_path
 from common.config import env
-from common.launch_already_created_sessions import (
-    api_session_names,
-    close_launched_sessions,
-    launch_already_created_sessions,
-    run_script_in_launched_sessions,
-)
+from common.launch_already_created_sessions import api_session_names
 from common.rstudio_workbenchjob import DEFAULT_WORKBENCH_JOB_SCRIPT
-from common.script_timings import script_timings_csv_path, write_script_timings_csv
-from common.session_actions import login_to_posit_workbench
+from common.script_run_scenarios import run_script_in_existing_sessions_scenario
 
 pytestmark = pytest.mark.rstudio_local
 
-HTP_SCRIPT_PATH = env("HIGH_THROUGHPUT_JOB_SCRIPT", DEFAULT_WORKBENCH_JOB_SCRIPT)
-# The script writes OUTPUT_FILE_NAME relative to its working directory, so
-# each session setwd()s to OUTPUT_DIR/<session name> before sourcing it.
-OUTPUT_DIR = env("HIGH_THROUGHPUT_JOB_OUTPUT_DIR", "/fsx/data/batch_mayur")
-OUTPUT_FILE_NAME = "generated_data.csv"
 SCRIPT_TIMEOUT_MS = int(env("HIGH_THROUGHPUT_JOB_TIMEOUT_MS", "1800000"))
+
+# Named API sessions (AUTO_API_SESSION_<API_SESSION_START..API_SESSION_END>)
+HTP_SCRIPT_PATH = env("HIGH_THROUGHPUT_JOB_SCRIPT", DEFAULT_WORKBENCH_JOB_SCRIPT)
+OUTPUT_DIR = env("HIGH_THROUGHPUT_JOB_OUTPUT_DIR", "/home/posit")
+OUTPUT_FILE_NAME = "generated_data.csv"
 # Set to "false" to keep each session's OUTPUT_FILE_NAME and folder.
 DELETE_OUTPUT = env("HIGH_THROUGHPUT_JOB_DELETE_OUTPUT", "true").lower() != "false"
 TIMINGS_LABEL = "existing_api_sessions"
 
+# Sessions recorded in testdata/session_ids_U<CSV_SESSIONS_USER>.csv
+CSV_SESSIONS_USER = int(env("CSV_SESSIONS_USER", "1"))
+CSV_SCRIPT_PATH = env("CSV_SESSIONS_SCRIPT", "/home/posit/generate_10kb_csv.R")
+CSV_OUTPUT_DIR = env("CSV_SESSIONS_OUTPUT_DIR", "/home/posit")
+CSV_OUTPUT_FILE_NAME = "generated_data_10kb.csv"
+CSV_TIMINGS_LABEL = "csv_api_sessions_U%d" % CSV_SESSIONS_USER
 
-def test_launch_existing_sessions_run_high_throughput_script_timed(context):
-    """Open each existing API session in its own tab, setwd to
-    OUTPUT_DIR/<session name>, source HTP_SCRIPT_PATH in every console
-    concurrently and capture the time each run takes. Each run must create
-    OUTPUT_FILE_NAME, which is then deleted (/fsx/data is close to full)
-    unless HIGH_THROUGHPUT_JOB_DELETE_OUTPUT=false.
+
+def test_existing_api_sessions_run_high_throughput_script_timed(context):
+    """Sessions AUTO_API_SESSION_<API_SESSION_START..API_SESSION_END> each run
+    the high-throughput script to completion and create OUTPUT_FILE_NAME
+    (deleted afterwards unless HIGH_THROUGHPUT_JOB_DELETE_OUTPUT=false).
     Writes evidence/rstudio_script_timings_existing_api_sessions.csv.
+
+    Flow: login -> open each existing session in a tab -> setwd to
+    OUTPUT_DIR/<session name> -> run script in all consoles at once ->
+    check (and delete) output files -> close tabs
     """
-    session_names = api_session_names()
-    home_url = login_to_posit_workbench(context.new_page())
-    launched, runs = [], []
+    not_opened, failures = run_script_in_existing_sessions_scenario(
+        context, api_session_names(), TIMINGS_LABEL, HTP_SCRIPT_PATH,
+        OUTPUT_DIR, OUTPUT_FILE_NAME, SCRIPT_TIMEOUT_MS, delete_output=DELETE_OUTPUT,
+    )
+    assert not not_opened, "sessions that could not be opened: %s" % not_opened
+    assert not failures, "script runs that did not finish: %s" % failures
 
-    started = time.time()
-    try:
-        launched = launch_already_created_sessions(context, home_url, session_names)
-        not_opened = ["%s: %s" % (s.session_name, s.error) for s in launched if s.error]
-        assert not not_opened, "sessions that could not be opened: %s" % not_opened
 
-        runs = run_script_in_launched_sessions(
-            launched, HTP_SCRIPT_PATH, working_dir=OUTPUT_DIR, timeout_ms=SCRIPT_TIMEOUT_MS,
-            output_path=OUTPUT_FILE_NAME, per_session_dir=True, delete_output=DELETE_OUTPUT,
-        )
-        failures = ["%s: %s" % (r["session_name"], r["status"]) for r in runs if r["status"] != "ok"]
-        print(
-            "\n[rstudio-local] %s: %d of %d session(s) ran %s successfully, %.2fs in total"
-            % (TIMINGS_LABEL, len(runs) - len(failures), len(runs), HTP_SCRIPT_PATH, time.time() - started)
-        )
-        assert not failures, "script runs that did not finish: %s" % failures
-    finally:
-        write_script_timings_csv(script_timings_csv_path(TIMINGS_LABEL), runs)
-        close_launched_sessions(launched)
+def test_sessions_from_ids_csv_run_r_script_timed(context):
+    """The sessions recorded in testdata/session_ids_U<user>.csv (written when
+    they were created through the API) each run CSV_SCRIPT_PATH to completion
+    and leave CSV_OUTPUT_FILE_NAME in their folder (kept).
+    Writes evidence/rstudio_script_timings_csv_api_sessions_U<user>.csv.
+
+    Flow: read session names from CSV -> login -> open each session in a tab
+    -> setwd to CSV_OUTPUT_DIR/<session name> -> run script in all consoles
+    at once -> check output files -> close tabs
+    """
+    csv_path = session_ids_csv_path(CSV_SESSIONS_USER)
+    session_names = read_session_names(csv_path)
+    assert session_names, "no session names found in %s" % csv_path
+
+    not_opened, failures = run_script_in_existing_sessions_scenario(
+        context, session_names, CSV_TIMINGS_LABEL, CSV_SCRIPT_PATH,
+        CSV_OUTPUT_DIR, CSV_OUTPUT_FILE_NAME, SCRIPT_TIMEOUT_MS, user=CSV_SESSIONS_USER,
+    )
+    assert not not_opened, "sessions that could not be opened: %s" % not_opened
+    assert not failures, "script runs that did not finish: %s" % failures

@@ -1,49 +1,24 @@
 import os
 import sys
-import time
 
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from common.client import PMTClient  # noqa: E402
-from common import config  # noqa: E402
 
-
-def pytest_configure(config):
-    config.addinivalue_line("markers", "scenario(id): scenario ID from the NFR workbook")
-    config.addinivalue_line("markers", "slow: takes more than 10 minutes")
-    config.addinivalue_line(
-        "markers", "rstudio_local: drives a browser against a local RStudio Workbench instance"
-    )
+@pytest.fixture(scope="session")
+def browser_type_launch_args(browser_type_launch_args):
+    """Open headed browsers maximized (no effect when headless)."""
+    args = list(browser_type_launch_args.get("args", []))
+    if "--start-maximized" not in args:
+        args.append("--start-maximized")
+    return {**browser_type_launch_args, "args": args}
 
 
 @pytest.fixture(scope="session")
-def cfg():
-    return config
-
-
-@pytest.fixture(scope="session")
-def client():
-    return PMTClient(role="user")
-
-
-@pytest.fixture(scope="session")
-def readonly():
-    return PMTClient(role="readonly")
-
-
-@pytest.fixture(scope="session")
-def project_id():
-    return config.env("PMT_TEST_PROJECT_ID", required=True)
-
-
-@pytest.fixture(scope="session")
-def metrics():
-    """Optional. Load runs work without it; resource-side checks do not."""
-    try:
-        from common.metrics import get_metrics
-
-        return get_metrics()
-    except Exception as exc:
-        pytest.skip("metrics backend unavailable: %s" % exc)
+def browser_context_args(browser_context_args, pytestconfig):
+    """With --headed, let pages fill the maximized window instead of the
+    fixed 1280x720 viewport. Headless runs keep the default viewport."""
+    if not pytestconfig.getoption("--headed", default=False):
+        return browser_context_args
+    return {**browser_context_args, "no_viewport": True}

@@ -9,38 +9,44 @@ from common.helper_function import (
     create_sessions_with_working_dir,
     failed,
     format_timings,
+    login_and_plan_session_names,
 )
 from common.perf_scenarios import run_launch_perf_single
-from common.session_actions import WORKING_DIR, login_to_posit_workbench
+from common.rstudio_session_helper import AUTO_PERF_NAME_PREFIX
+from common.session_actions import WORKING_DIR
 from common.session_cleanup import cleanup_and_verify_sessions
 from common.session_monitoring import keep_sessions_idle_and_poll_file_list
 from common.session_scenarios import open_sessions_in_tabs
-from common.rstudio_session_helper import next_auto_perf_session_names, row_ids
 
 pytestmark = pytest.mark.rstudio_local
 
 SESSION_COUNT = int(env("RSTUDIO_SESSION_COUNT", "10"))
 
+
 @pytest.mark.skip()
-def test_create_and_quit_one_rstudio_session(page):
-    """Creates one session, force-quits it via its own Details panel (never
-    "Quit All") and confirms no other session was affected.
+def test_create_and_quit_single_session(page):
+    """One session is created and then force-quit through its own Details
+    panel (never "Quit All"), leaving every other session untouched.
+
+    Flow: login -> launch new session -> quit session -> check no other
+    session was affected
     """
     run_launch_perf_single(page)
 
 
+def test_multiple_sessions_stay_alive_while_idle(page, context):
+    """SESSION_COUNT sessions all stay alive while held idle together in
+    their own tabs, with liveness checks and a file-list poll every 30s.
 
-def test_create_multiple_rstudio_sessions(page, context):
-    """Creates SESSION_COUNT sessions one after another, then reopens each in
-    its own tab and holds them all idle together, liveness-checking and
-    polling the file list every 30s.
+    Flow: login -> reserve AUTO_PERF_SESSION_<N> names -> launch each session
+    and setwd -> reopen each in a tab -> hold idle and poll -> close tabs ->
+    quit sessions
     """
-    home_url = login_to_posit_workbench(page)
-    before_ids = row_ids(page)
-
     # Reserve every name from one scan: rescanning per session can race the
     # previous row settling and hand out a name already in use.
-    planned_names = next_auto_perf_session_names(page, SESSION_COUNT, home_url=home_url)
+    home_url, before_ids, planned_names = login_and_plan_session_names(
+        page, AUTO_PERF_NAME_PREFIX, SESSION_COUNT
+    )
 
     tabs = []
     try:

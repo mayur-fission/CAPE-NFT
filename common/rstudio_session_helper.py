@@ -1,22 +1,35 @@
-﻿"""Session lifecycle automation: naming, launching, opening and quitting
-sessions, and reading the session list. Workbench has no public REST API
-for this, so it drives the UI.
+"""Session lifecycle in the Workbench UI: the session list, naming, launching,
+opening and quitting sessions. Workbench has no public REST API for the
+browser flow, so this drives the UI.
 """
 import re
 import time
 from collections import namedtuple
+from contextlib import contextmanager
 
 from common import locators
 from common.config import env
 
 SESSION_TYPE = env("RSTUDIO_SESSION_TYPE", "RStudio Pro")
 
+# elapsed_s runs from the click to the IDE's Console appearing;
+# bytes_received counts response bodies in that window.
 SessionLaunch = namedtuple("SessionLaunch", ["elapsed_s", "bytes_received", "session_name"])
 
 AUTO_PERF_NAME_PREFIX = "AUTO_PERF_SESSION_"
-
-# Names the sessions launched by tests/test_rstudio_run_r_script_perf.py.
 RUN_R_SESSION_NAME_PREFIX = "Run_R_session_"
+
+# The session table re-renders shortly after "New Session" appears.
+SESSION_LIST_SETTLE_MS = 1500
+
+
+def goto_session_list(page, home_url, settle_ms=SESSION_LIST_SETTLE_MS, timeout_ms=30000):
+    """Navigate `page` to the session list and wait until it has rendered
+    (plus settle_ms, so rows read afterwards are complete)."""
+    page.goto(home_url)
+    page.get_by_text(locators.NEW_SESSION_TEXT, exact=True).first.wait_for(state="visible", timeout=timeout_ms)
+    if settle_ms:
+        page.wait_for_timeout(settle_ms)
 
 
 def _highest_number_with_prefix(page, prefix):
@@ -30,32 +43,19 @@ def _highest_number_with_prefix(page, prefix):
     return highest
 
 
-def next_session_name(page, prefix, home_url=None):
-    """Next <prefix><N> name from the session list. Pass home_url to navigate
-    there first.
-    """
-    if home_url:
-        page.goto(home_url)
-        page.get_by_text(locators.NEW_SESSION_TEXT, exact=True).first.wait_for(state="visible", timeout=30000)
-        page.wait_for_timeout(1500)  # the session table re-renders shortly after
-    return "%s%d" % (prefix, _highest_number_with_prefix(page, prefix) + 1)
-
-
 def next_session_names(page, prefix, count, home_url=None):
-    """Reserve `count` consecutive <prefix><N> names from one scan, so
-    concurrent browsers don't race for the same name.
-    """
+    """Reserve `count` consecutive <prefix><N> names from one scan of the
+    session list, so concurrent browsers don't race for the same name. Pass
+    home_url to navigate there first."""
     if home_url:
-        page.goto(home_url)
-        page.get_by_text(locators.NEW_SESSION_TEXT, exact=True).first.wait_for(state="visible", timeout=30000)
-        page.wait_for_timeout(1500)
+        goto_session_list(page, home_url)
     start = _highest_number_with_prefix(page, prefix) + 1
     return ["%s%d" % (prefix, start + i) for i in range(count)]
 
 
-def next_auto_perf_session_name(page, home_url=None):
-    """next_session_name() with the AUTO_PERF_SESSION_ prefix."""
-    return next_session_name(page, AUTO_PERF_NAME_PREFIX, home_url=home_url)
+def next_session_name(page, prefix, home_url=None):
+    """The next free <prefix><N> name (see next_session_names())."""
+    return next_session_names(page, prefix, 1, home_url=home_url)[0]
 
 
 def next_auto_perf_session_names(page, count, home_url=None):
@@ -63,12 +63,41 @@ def next_auto_perf_session_names(page, count, home_url=None):
     return next_session_names(page, AUTO_PERF_NAME_PREFIX, count, home_url=home_url)
 
 
+@contextmanager
+def _count_response_bytes(page):
+    """Yield a one-item list holding the bytes of every response body `page`
+    receives inside the block."""
+    received = [0]
+
+    def _on_response(response):
+        try:
+            received[0] += len(response.body())
+        except Exception:
+            pass  # some responses (websocket upgrades, 304s, ...) have no body
+
+    page.on("response", _on_response)
+    try:
+        yield received
+    finally:
+        page.remove_listener("response", _on_response)
+
+
+def _click_and_wait_for_ide(page, target, session_name, timeout_ms):
+    """Click `target` and wait for the session IDE's Console. Returns a
+    SessionLaunch timed from the click."""
+    with _count_response_bytes(page) as received:
+        started = time.time()
+        target.click()
+        page.get_by_text(locators.CONSOLE_TAB_TEXT, exact=True).first.wait_for(state="visible", timeout=timeout_ms)
+        elapsed = time.time() - started
+    return SessionLaunch(elapsed_s=elapsed, bytes_received=received[0], session_name=session_name)
+
+
 def open_existing_session(page, home_url, session_name, timeout_ms=60000):
-    """Open the existing session `session_name` from the session list and
-    wait for its IDE. Returns a SessionLaunch.
-    """
-    page.goto(home_url)
-    page.get_by_text(locators.NEW_SESSION_TEXT, exact=True).first.wait_for(state="visible", timeout=30000)
+    """Open the existing (Active or Suspended) session `session_name` from the
+    session list and wait for its IDE. Returns a SessionLaunch. Raises
+    RuntimeError if no such session is listed."""
+    goto_session_list(page, home_url, settle_ms=0)
 
     # Wait for the row: a just-launched session's row can render late.
     link = page.get_by_role("link", name=session_name, exact=True)
@@ -79,72 +108,26 @@ def open_existing_session(page, home_url, session_name, timeout_ms=60000):
             "no session named %r found on the session list - it must already "
             "exist and be joinable (Active or Suspended)" % session_name
         )
-
-    bytes_received = [0]
-
-    def _on_response(response):
-        try:
-            bytes_received[0] += len(response.body())
-        except Exception:
-            pass  # some responses (websocket upgrades, 304s, ...) have no body
-
-    page.on("response", _on_response)
-    try:
-        started = time.time()
-        link.first.click()
-        page.get_by_text(locators.CONSOLE_TAB_TEXT, exact=True).first.wait_for(state="visible", timeout=timeout_ms)
-        elapsed = time.time() - started
-    finally:
-        page.remove_listener("response", _on_response)
-
-    return SessionLaunch(elapsed_s=elapsed, bytes_received=bytes_received[0], session_name=session_name)
+    return _click_and_wait_for_ide(page, link.first, session_name, timeout_ms)
 
 
-def launch_new_session(page, home_url, session_name=None):
-    """Launch a new session via the New Session dialog and wait for its IDE.
+def launch_new_session(page, home_url, session_name=None, timeout_ms=60000):
+    """Launch a new session via the New Session dialog and wait for its IDE
+    (Launch replaces the page's content rather than opening a tab).
 
     session_name defaults to the next AUTO_PERF_SESSION_<N>; pass one
-    explicitly when launching concurrently.
-
-    Returns SessionLaunch(elapsed_s, bytes_received, session_name), where
-    elapsed_s runs from clicking Launch to the IDE appearing.
+    explicitly when launching concurrently. Returns a SessionLaunch.
     """
-    page.goto(home_url)
-    page.get_by_text(locators.NEW_SESSION_TEXT, exact=True).first.wait_for(state="visible", timeout=30000)
-
+    goto_session_list(page, home_url, settle_ms=0 if session_name else SESSION_LIST_SETTLE_MS)
     if session_name is None:
-        page.wait_for_timeout(1500)  # the session table re-renders shortly after
-        session_name = next_auto_perf_session_name(page)
+        session_name = next_session_name(page, AUTO_PERF_NAME_PREFIX)
 
     page.get_by_text(locators.NEW_SESSION_TEXT, exact=True).first.click()
-
     page.get_by_text(SESSION_TYPE, exact=True).first.click()
     page.get_by_role(locators.SESSION_NAME_FIELD_ROLE, name=locators.SESSION_NAME_FIELD_NAME).fill(session_name)
     launch = page.get_by_role("button", name=locators.LAUNCH_BUTTON)
     launch.wait_for(state="visible", timeout=10000)
-
-    bytes_received = [0]
-
-    def _on_response(response):
-        try:
-            bytes_received[0] += len(response.body())
-        except Exception:
-            pass  # some responses (websocket upgrades, 304s, ...) have no body
-
-    page.on("response", _on_response)
-    try:
-        started = time.time()
-        launch.click()
-
-        # Launch swaps the current page's content to the new session's IDE
-        # rather than opening a tab. "Console" only appears once that IDE
-        # has rendered.
-        page.get_by_text(locators.CONSOLE_TAB_TEXT, exact=True).first.wait_for(state="visible", timeout=60000)
-        elapsed = time.time() - started
-    finally:
-        page.remove_listener("response", _on_response)
-
-    return SessionLaunch(elapsed_s=elapsed, bytes_received=bytes_received[0], session_name=session_name)
+    return _click_and_wait_for_ide(page, launch, session_name, timeout_ms)
 
 
 def is_session_alive(page):
@@ -164,25 +147,9 @@ def row_ids(page):
 
 
 def get_active_session_count(page):
-    """Number of rows on the session list with status Active. Assumes `page`
-    is already showing the session list.
-    """
+    """Number of rows with status Active. `page` must show the session list."""
     cells = page.locator(locators.SESSION_STATUS_CELL_SELECTOR)
     return sum(1 for i in range(cells.count()) if "Active" in cells.nth(i).inner_text())
-
-
-def new_row_id_after(page, home_url, before_ids):
-    """Return the one row id not in before_ids, or None if there isn't
-    exactly one.
-    """
-    page.goto(home_url)
-    page.get_by_text(locators.NEW_SESSION_TEXT, exact=True).first.wait_for(state="visible", timeout=30000)
-    page.wait_for_timeout(1500)  # the session table re-renders shortly after
-    new_ids = row_ids(page) - before_ids
-    return new_ids.pop() if len(new_ids) == 1 else None
-
-
-_DIALOG_SELECTOR = "[role='dialog'], [role='alertdialog']"
 
 
 def _click_and_confirm(page, click_action, confirm_button_name, timeout_ms=5000, poll_interval_ms=200):
@@ -192,7 +159,7 @@ def _click_and_confirm(page, click_action, confirm_button_name, timeout_ms=5000,
     Waits for the dialog count to grow, since the trigger and confirm
     buttons share a name. No-op if no dialog appears.
     """
-    dialogs = page.locator(_DIALOG_SELECTOR)
+    dialogs = page.locator(locators.DIALOG_SELECTOR)
     before_count = dialogs.count()
     click_action()
 
@@ -204,11 +171,15 @@ def _click_and_confirm(page, click_action, confirm_button_name, timeout_ms=5000,
         dialogs.last.get_by_role("button", name=confirm_button_name).click()
 
 
+def _session_row(page, row_id):
+    return page.locator(locators.SESSION_STATUS_CELL_BY_ID % row_id).locator("xpath=ancestor::tr[1]")
+
+
 def quit_session(page, row_id):
     """Remove the row `row_id`: "Remove" for a failed-launch stub row, else
     Details > Force quit. Never uses "Quit All", which quits every session.
     """
-    row = page.locator(locators.SESSION_STATUS_CELL_BY_ID % row_id).locator("xpath=ancestor::tr[1]")
+    row = _session_row(page, row_id)
 
     remove = row.get_by_text(locators.REMOVE_LINK_TEXT, exact=True)
     if remove.count() > 0:
@@ -236,14 +207,13 @@ def bulk_quit_sessions(page, row_ids):
     """
     checked = set()
     for row_id in row_ids:
-        row = page.locator(locators.SESSION_STATUS_CELL_BY_ID % row_id).locator("xpath=ancestor::tr[1]")
+        row = _session_row(page, row_id)
         if row.count() == 0:
-            continue  # already gone - tolerate, don't fail the batch
+            continue  # already gone
 
         checkbox = row.get_by_role(locators.SESSION_ROW_CHECKBOX_ROLE, name=locators.SESSION_ROW_CHECKBOX_NAME)
         if checkbox.count() == 0:
-            # No checkbox on this row (e.g. a stub/failed-launch job row) -
-            # fall back to the single-row path for this one row only.
+            # e.g. a stub/failed-launch row - quit it on its own
             try:
                 quit_session(page, row_id)
             except Exception:
@@ -254,13 +224,10 @@ def bulk_quit_sessions(page, row_ids):
             checkbox.first.check()
             checked.add(row_id)
         except Exception:
-            pass  # skip this row, don't let one bad checkbox stall the batch
+            pass  # don't let one bad checkbox stall the batch
 
-    if not checked:
-        return checked
-
-    quit_button = page.get_by_role("button", name=locators.BULK_QUIT_BUTTON_TEXT % len(checked), exact=True)
-    if quit_button.count() > 0:
-        quit_button.click()
-
+    if checked:
+        quit_button = page.get_by_role("button", name=locators.BULK_QUIT_BUTTON_TEXT % len(checked), exact=True)
+        if quit_button.count() > 0:
+            quit_button.click()
     return checked

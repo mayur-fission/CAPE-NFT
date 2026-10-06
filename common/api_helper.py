@@ -1,7 +1,10 @@
-"""Posit Workbench API calls: POST/GET {workbenchServerUrl}/api/<method>.
+"""Posit Workbench API: launch, suspend, resume and stop sessions without a
+browser (POST/GET {server}/api/<method>), plus the testdata/ CSV files that
+record which sessions to create and the ids of the ones created.
 
-workbenchServerUrl is WORKBENCH_SERVER_URL, else the host of RSTUDIO_BASE_URL.
+{server} is WORKBENCH_SERVER_URL, else the host of RSTUDIO_BASE_URL.
 `user=N` means RSTUDIO_USER<N> with the bearer token API_TOKEN_USER_<N>.
+Run this module directly to print the user's sessions and the user list.
 """
 
 import csv
@@ -13,11 +16,9 @@ from urllib.parse import urlsplit
 import requests
 from openpyxl import Workbook
 
-from common.config import env
+from common.config import REPO_ROOT, env
 
-_TESTDATA_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "testdata"
-)
+_TESTDATA_DIR = os.path.join(REPO_ROOT, "testdata")
 _LAUNCH_FIELDS = ("session_id", "project_id", "url")
 _SESSION_TIMEOUT_S = 120
 DEFAULT_CPU_COUNT = "1"
@@ -31,6 +32,7 @@ _counter_lock = threading.Lock()
 
 
 def workbench_server_url():
+    """WORKBENCH_SERVER_URL, else scheme://host of RSTUDIO_BASE_URL."""
     url = env("WORKBENCH_SERVER_URL")
     if url:
         return url.rstrip("/")
@@ -39,10 +41,12 @@ def workbench_server_url():
 
 
 def _username(user):
+    """RSTUDIO_USER<user>."""
     return env("RSTUDIO_USER%d" % user, required=True)
 
 
 def _headers(user):
+    """JSON headers with user's bearer token (API_TOKEN_USER_<user>)."""
     return {
         "Content-Type": "application/json",
         "Authorization": "Bearer %s" % env("API_TOKEN_USER_%d" % user, required=True),
@@ -50,15 +54,18 @@ def _headers(user):
 
 
 def _url(method):
+    """{server}/api/<method>."""
     return "%s/api/%s" % (workbench_server_url(), method)
 
 
 def _json(resp):
+    """Parsed JSON body ({} when empty); raises requests.HTTPError on error."""
     resp.raise_for_status()
     return resp.json() if resp.content else {}
 
 
 def _post(method, user=1, kwparams=None, timeout=60):
+    """POST {"method", "kwparams"} as `user` and return the parsed reply."""
     body = {"method": method}
     if kwparams is not None:
         body["kwparams"] = kwparams
@@ -68,6 +75,7 @@ def _post(method, user=1, kwparams=None, timeout=60):
 
 
 def _get(method, user=1, params=None, timeout=60):
+    """GET with query `params` as `user` and return the parsed reply."""
     return _json(
         requests.get(
             _url(method), headers=_headers(user), params=params, timeout=timeout
@@ -213,6 +221,7 @@ def list_sessions(user=1):
 
 
 def session_name_of(session):
+    """A get_session entry's name (label, display name or launch name)."""
     return (
         session.get("label")
         or session.get("display_name")
@@ -264,6 +273,21 @@ def read_session_names(csv_path):
         ]
 
 
+def get_testdata_path(file_name):
+    """testdata/<file_name>."""
+    return os.path.join(_TESTDATA_DIR, file_name)
+
+
+def session_names_csv_path(user):
+    """testdata/session_names_U<user>.csv: the names to create for `user`."""
+    return get_testdata_path("session_names_U%d.csv" % user)
+
+
+def group_sessions_csv_paths(groups):
+    """{group: testdata/group_<group>_sessions.csv} for each group."""
+    return {g: get_testdata_path("group_%s_sessions.csv" % g) for g in groups}
+
+
 def session_ids_csv_path(user, ids_csv_path=None):
     """ids_csv_path, else testdata/session_ids_U<user>.csv."""
     return ids_csv_path or os.path.join(_TESTDATA_DIR, "session_ids_U%d.csv" % user)
@@ -290,13 +314,6 @@ def read_launched_sessions(csv_path):
     """[{session_name, session_id, project_id, url}] from write_session_ids."""
     with open(csv_path, newline="", encoding="utf-8-sig") as fh:
         return list(csv.DictReader(fh))
-
-
-def read_session_ids(csv_path):
-    """{session_name: session_id} from write_session_ids."""
-    return {
-        s["session_name"]: s["session_id"] for s in read_launched_sessions(csv_path)
-    }
 
 
 def session_projects_xlsx_path(user, xlsx_path=None):

@@ -1,10 +1,10 @@
-﻿"""Launch brand-new Run_R_session_<N> RStudio Pro session(s) and source an R
-script in each console - once, RUN_COUNT times, or for CONCURRENT_USERS
-users at once (each in its own isolated browser). Every test force-quits the
-sessions it created.
+"""R script run time in brand-new Run_R_session_<N> RStudio Pro sessions:
+sourced once or RUN_COUNT times, by one user or CONCURRENT_USERS users at once
+(each in its own isolated browser). Captures best-effort server/DB metrics
+and OTel samples, and force-quits every session created.
 
 The sourced script (default sample_10mb.R) must already exist in
-RSTUDIO_WORKING_DIR on the server. Server/DB metrics are best-effort only.
+RSTUDIO_WORKING_DIR on the server.
 """
 import pytest
 
@@ -14,6 +14,7 @@ from common.helper_function import (
     describe_script_runs,
     failed,
     is_headless,
+    login_and_snapshot,
     mean,
     optional_int,
     otel_sample,
@@ -24,11 +25,9 @@ from common.helper_function import (
 )
 from common.otel_metrics import capture_otel_metrics
 from common.script_timings import script_timings_csv_path, write_script_timings_csv
-from common.session_actions import login_to_posit_workbench
 from common.session_cleanup import cleanup_and_verify_sessions
 from common.session_concurrent import concurrent_launch_and_run_script
 from common.session_scenarios import launch_and_run_script
-from common.rstudio_session_helper import row_ids
 
 pytestmark = pytest.mark.rstudio_local
 
@@ -45,10 +44,14 @@ CONCURRENT_USERS = int(env("RSTUDIO_RUN_SCRIPT_CONCURRENT_USERS", "3"))
 CONCURRENT_MAX_WORKERS = env("RSTUDIO_RUN_SCRIPT_CONCURRENT_MAX_WORKERS")
 
 
-def test_rstudio_new_session_single_run(page):
-    """One new session, working directory set, script sourced once."""
-    home_url = login_to_posit_workbench(page)
-    before_ids = row_ids(page)
+def test_new_session_run_r_script_once(page):
+    """One new session sources SOURCE_COMMAND once.
+    Writes evidence/rstudio_script_timings_new_session_single_run.csv.
+
+    Flow: login -> launch new session -> setwd -> run script -> capture
+    metrics -> quit session
+    """
+    home_url, before_ids = login_and_snapshot(page)
     script_runs = []
 
     try:
@@ -70,11 +73,15 @@ def test_rstudio_new_session_single_run(page):
         cleanup_and_verify_sessions(page, home_url, before_ids)
 
 
-def test_rstudio_new_session_multiple_runs(page):
-    """One new session, script sourced RUN_COUNT times back to back with
-    THINK_TIME_SECONDS between runs."""
-    home_url = login_to_posit_workbench(page)
-    before_ids = row_ids(page)
+def test_new_session_run_r_script_repeatedly(page):
+    """One new session sources SOURCE_COMMAND RUN_COUNT times back to back,
+    pausing THINK_TIME_SECONDS between runs.
+    Writes evidence/rstudio_script_timings_new_session_multiple_runs.csv.
+
+    Flow: login -> launch new session -> setwd -> run script RUN_COUNT times
+    -> capture metrics -> quit session
+    """
+    home_url, before_ids = login_and_snapshot(page)
     script_runs = []
 
     try:
@@ -97,11 +104,15 @@ def test_rstudio_new_session_multiple_runs(page):
         cleanup_and_verify_sessions(page, home_url, before_ids)
 
 
-def test_rstudio_new_sessions_concurrent_single_run(page, request):
-    """CONCURRENT_USERS users each launch a new session in their own browser
-    at once and source the script once."""
-    home_url = login_to_posit_workbench(page)
-    before_ids = row_ids(page)
+def test_concurrent_users_new_sessions_run_r_script_once(page, request):
+    """CONCURRENT_USERS users, each in their own browser, launch a new session
+    at the same time and source SOURCE_COMMAND once.
+    Writes evidence/rstudio_script_timings_new_sessions_concurrent_single_run.csv.
+
+    Flow: login -> per user in parallel: open browser -> login -> launch new
+    session -> setwd -> run script -> capture metrics -> quit sessions
+    """
+    home_url, before_ids = login_and_snapshot(page)
     script_runs = []
 
     try:
@@ -131,12 +142,17 @@ def test_rstudio_new_sessions_concurrent_single_run(page, request):
         cleanup_and_verify_sessions(page, home_url, before_ids)
 
 
-def test_rstudio_new_sessions_concurrent_multiple_runs(page, request):
-    """CONCURRENT_USERS users each launch a new session in their own browser
-    at once and source the script RUN_COUNT times, with THINK_TIME_SECONDS
-    between runs."""
-    home_url = login_to_posit_workbench(page)
-    before_ids = row_ids(page)
+def test_concurrent_users_new_sessions_run_r_script_repeatedly(page, request):
+    """CONCURRENT_USERS users, each in their own browser, launch a new session
+    at the same time and source SOURCE_COMMAND RUN_COUNT times, pausing
+    THINK_TIME_SECONDS between runs.
+    Writes evidence/rstudio_script_timings_new_sessions_concurrent_multiple_runs.csv.
+
+    Flow: login -> per user in parallel: open browser -> login -> launch new
+    session -> setwd -> run script RUN_COUNT times -> capture metrics -> quit
+    sessions
+    """
+    home_url, before_ids = login_and_snapshot(page)
     script_runs = []
 
     try:

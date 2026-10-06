@@ -1,4 +1,4 @@
-﻿"""Posit Workbench browser automation: sign-in, working directory, folder
+"""Posit Workbench browser automation: sign-in, working directory, folder
 and file management, and creating a project from an existing directory.
 
 Console commands live in rstudio_console_commands.py, text files in
@@ -38,10 +38,13 @@ def set_working_directory(page, path, timeout_ms=10000):
 
 
 def get_working_directory(page, timeout_ms=10000):
+    """The console's getwd()."""
     return read_console_value(page, "getwd()", timeout_ms)
 
 
 def verify_working_directory(page, expected_path):
+    """Assert getwd() is `expected_path` (ignoring a trailing slash) and
+    return it."""
     actual_path = get_working_directory(page)
 
     def _normalize(path):
@@ -66,9 +69,6 @@ def create_folder(page, path, timeout_ms=10000):
     return read_console_value(page, r_expr, timeout_ms) == "TRUE"
 
 
-def create_folders(page, paths, timeout_ms=10000):
-    """create_folder() for each path. Returns one bool per path."""
-    return [create_folder(page, path, timeout_ms=timeout_ms) for path in paths]
 
 
 ProjectCreation = namedtuple("ProjectCreation", ["elapsed_s", "working_directory"])

@@ -1,5 +1,5 @@
-"""Text-file editor workflow: open a new text tab, type into it, switch
-tabs, and save via the Save File dialog.
+"""Text-file editor workflow: open a new text tab, type into it and save it
+via the Save File dialog.
 """
 import re
 import time
@@ -12,6 +12,8 @@ _AUTO_TEXT_FILE_RE = re.compile(re.escape(AUTO_TEXT_FILE_PREFIX) + r"(\d+)")
 
 DEFAULT_TEXT_FILE_CONTENT = "This is text entered by playwright"
 TEXT_FILE_SAVE_FOLDER = "auto_test"
+
+_ACE_TEXT_INPUT_SELECTOR = ".ace_text-input"
 
 # Ctrl+S retries if the Save File dialog doesn't appear (see save_file()).
 _SAVE_DIALOG_ATTEMPTS = 3
@@ -41,7 +43,7 @@ def _active_editor_input(page, timeout_ms):
     while time.time() < deadline:
         idx = page.evaluate(locators.ACTIVE_EDITOR_INPUT_INDEX_JS)
         if idx >= 0:
-            return page.locator(".ace_text-input").nth(idx)
+            return page.locator(_ACE_TEXT_INPUT_SELECTOR).nth(idx)
         page.wait_for_timeout(300)
     return None
 
@@ -73,25 +75,6 @@ def type_in_active_tab(page, content, timeout_ms=10000):
     page.keyboard.type(content)
 
 
-def switch_to_file_tab(page, file_name, timeout_ms=10000):
-    """Switch to the open source tab named `file_name`.
-
-    Not live-verified: tries role=tab first, then visible text. Raises
-    RuntimeError if the tab isn't found or no editor appears afterwards.
-    """
-    tab = page.get_by_role("tab", name=file_name, exact=True)
-    if tab.count() == 0:
-        tab = page.get_by_text(file_name, exact=True)
-    if tab.count() == 0:
-        raise RuntimeError("no open tab named %r found" % file_name)
-
-    tab.first.click()
-
-    if _active_editor_input(page, timeout_ms) is None:
-        raise RuntimeError(
-            "switching to tab %r did not bring up an active editor within %dms"
-            % (file_name, timeout_ms)
-        )
 
 
 def _save_dialog_scope(page, name_field):
@@ -102,9 +85,9 @@ def _save_dialog_scope(page, name_field):
     return dialog.last if dialog.count() > 0 else page
 
 
-def save_file(page, folder=TEXT_FILE_SAVE_FOLDER, file_name=None, timeout_ms=30000):
-    """Save the active tab (Ctrl+S) into `folder` as `file_name` (default:
-    next Text_<N>).
+def save_file(page, folder=None, file_name=None, timeout_ms=30000):
+    """Save the active tab (Ctrl+S) into `folder` (default
+    TEXT_FILE_SAVE_FOLDER) as `file_name` (default: next Text_<N>).
 
     Retries Ctrl+S when the dialog doesn't appear, and double-clicks the
     folder (a single click only selects it).
@@ -112,6 +95,7 @@ def save_file(page, folder=TEXT_FILE_SAVE_FOLDER, file_name=None, timeout_ms=300
     Returns TextFileCreation(elapsed_s, file_name, folder), where elapsed_s
     runs from clicking Save to the dialog closing.
     """
+    folder = folder or TEXT_FILE_SAVE_FOLDER
     name_field = page.locator(locators.SAVE_FILE_NAME_INPUT_SELECTOR)
     last_exc = None
     for attempt in range(_SAVE_DIALOG_ATTEMPTS):
@@ -144,11 +128,10 @@ def save_file(page, folder=TEXT_FILE_SAVE_FOLDER, file_name=None, timeout_ms=300
     return TextFileCreation(elapsed_s=elapsed, file_name=file_name, folder=folder)
 
 
-def create_text_file(page, content=DEFAULT_TEXT_FILE_CONTENT, folder=TEXT_FILE_SAVE_FOLDER,
-                      file_name=None, timeout_ms=30000):
-    """open_new_text_tab() + type_in_active_tab() + save_file().
-    Returns the TextFileCreation from save_file().
+def create_text_file(page, content=None, folder=None, file_name=None, timeout_ms=30000):
+    """Open a new text tab, type `content` (default DEFAULT_TEXT_FILE_CONTENT)
+    and save it with save_file(). Returns the TextFileCreation from save_file().
     """
     open_new_text_tab(page, timeout_ms=timeout_ms)
-    type_in_active_tab(page, content, timeout_ms=timeout_ms)
+    type_in_active_tab(page, content or DEFAULT_TEXT_FILE_CONTENT, timeout_ms=timeout_ms)
     return save_file(page, folder=folder, file_name=file_name, timeout_ms=timeout_ms)

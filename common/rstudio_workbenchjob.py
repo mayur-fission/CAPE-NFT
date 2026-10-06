@@ -1,29 +1,24 @@
-"""Workbench Jobs automation: launch a session, open the Workbench Jobs pane,
-and start an R script as a Workbench job via the Start Workbench Job dialog.
-Also multi-session flows that start a job (or source a script in the
-console) in each session's own tab and close the tab straight away.
+"""Workbench Jobs automation (start, inspect and stop jobs from the Workbench
+Jobs pane) and multi-session flows that start a job or source a script in
+each new session's own tab: closing the tab straight away, or waiting for
+every run and checking its output file.
 """
 import posixpath
 import time
-from collections import namedtuple
 
 from common import locators
 from common.rstudio_console_commands import (
     get_file_size,
-    is_console_command_done,
+    r_source_command,
     r_string,
     run_console_command,
     submit_console_command,
 )
 from common.rstudio_session_helper import launch_new_session, open_existing_session
+from common.script_timings import new_run_record, submit_in_each, wait_for_console_runs
 from common.session_actions import create_folder, delete_file, set_session_working_directory
 
-DEFAULT_WORKBENCH_JOB_SCRIPT = "/fsx/data/sample_run_sleep.R"
-
-WorkbenchJobRun = namedtuple(
-    "WorkbenchJobRun", ["session_launch", "job_name", "submit_elapsed_s", "elapsed_s", "status"]
-)
-
+DEFAULT_WORKBENCH_JOB_SCRIPT = "/home/posit/sample_run_sleep.R"
 
 def open_workbench_jobs_tab(page, timeout_ms=10000):
     """Click the Workbench Jobs tab next to the Console."""
@@ -52,10 +47,16 @@ def open_start_workbench_job_dialog(page, timeout_ms=10000, attempts=3):
 
 def _check_script_path(dialog, script_path):
     """The R Script box is read-only and pre-filled from the active editor
-    tab; check that it holds `script_path`.
+    tab; check that it holds `script_path`. Paths under the home directory
+    are shown as ~/..., so /home/<user>/x.R matches ~/x.R.
     """
     value = dialog.locator(locators.WORKBENCH_JOB_SCRIPT_INPUT_SELECTOR).input_value()
-    if value != script_path:
+    under_home = (
+        value.startswith("~/")
+        and script_path.startswith("/home/")
+        and script_path.split("/", 3)[3:] == [value[2:]]
+    )
+    if value != script_path and not under_home:
         raise RuntimeError("R Script box shows %r, expected %r" % (value, script_path))
 
 
@@ -88,6 +89,7 @@ def _settled_job_count(page, job_name, timeout_ms=15000, stable_ms=3000, poll_in
 
 
 def _wait_for_new_job(page, job_name, before_count, timeout_ms, poll_interval_ms=500):
+    """Wait until there are more `job_name` entries than before_count."""
     deadline = time.time() + timeout_ms / 1000.0
     while time.time() < deadline:
         if _job_names(page, job_name).count() > before_count:
@@ -115,6 +117,7 @@ def stop_workbench_job(page, job_name, timeout_ms=30000):
     """
     open_workbench_jobs_tab(page)
     _settled_job_count(page, job_name)
+
     def _stop_buttons():
         """Stop Job button of each running `job_name` entry, newest first."""
         names = _job_names(page, job_name)
@@ -156,20 +159,28 @@ def stop_workbench_job(page, job_name, timeout_ms=30000):
     return True
 
 
-def wait_for_job_status(page, job_name, timeout_ms=600000, poll_interval_ms=2000):
-    """Poll until the newest `job_name` entry shows a final state, and return
-    that state. Raises RuntimeError on timeout.
+def _click_start(page, dialog, timeout_ms, attempts=3):
+    """Click Start until the dialog closes. An instant click can be ignored
+    (the dialog stays open), so press and release the mouse with a short
+    pause, and retry. If Start never takes, Cancel the dialog (so it doesn't
+    block the IDE) and raise.
     """
-    open_workbench_jobs_tab(page)
-    deadline = time.time() + timeout_ms / 1000.0
-    while time.time() < deadline:
-        status = get_job_status(page, job_name) or ""
-        for state in locators.WORKBENCH_JOB_FINAL_STATES:
-            if state in status:
-                return state
-        page.wait_for_timeout(poll_interval_ms)
-
-    raise RuntimeError("Workbench job %r did not finish within %dms" % (job_name, timeout_ms))
+    button = dialog.locator(locators.WORKBENCH_JOB_START_BUTTON_SELECTOR)
+    per_attempt_ms = max(5000, timeout_ms // attempts)
+    for attempt in range(attempts):
+        try:
+            button.click(delay=150, timeout=per_attempt_ms)
+            dialog.wait_for(state="hidden", timeout=per_attempt_ms)
+            return
+        except Exception:
+            if attempt + 1 == attempts:
+                try:
+                    dialog.locator(locators.WORKBENCH_JOB_CANCEL_BUTTON_SELECTOR).click(timeout=5000)
+                except Exception:
+                    pass
+                raise
+            print("[rstudio-local] Start Workbench Job click ignored, retrying (%d/%d)" % (attempt + 2, attempts))
+            page.wait_for_timeout(1000)
 
 
 def start_workbench_job(page, script_path=DEFAULT_WORKBENCH_JOB_SCRIPT, timeout_ms=30000):
@@ -185,6 +196,10 @@ def start_workbench_job(page, script_path=DEFAULT_WORKBENCH_JOB_SCRIPT, timeout_
     open_workbench_jobs_tab(page, timeout_ms=timeout_ms)
     dialog = open_start_workbench_job_dialog(page, timeout_ms=timeout_ms)
 
+    # Start does nothing unless the Workbench Job Options tab has been shown
+    # (it fills in the job's options), so visit it before Environment.
+    dialog.get_by_text(locators.WORKBENCH_JOB_OPTIONS_TAB_TEXT, exact=True).first.click()
+    page.wait_for_timeout(1500)
     dialog.locator(locators.WORKBENCH_JOB_ENVIRONMENT_TAB_SELECTOR).click()
     # Start is ignored until the Environment tab has loaded.
     dialog.get_by_text(locators.WORKBENCH_JOB_ENVIRONMENT_LOADED_TEXT).first.wait_for(
@@ -196,38 +211,9 @@ def start_workbench_job(page, script_path=DEFAULT_WORKBENCH_JOB_SCRIPT, timeout_
     job_name = posixpath.basename(script_path)
     before_count = _settled_job_count(page, job_name)
     started = time.time()
-    dialog.locator(locators.WORKBENCH_JOB_START_BUTTON_SELECTOR).click()
-    dialog.wait_for(state="hidden", timeout=timeout_ms)
+    _click_start(page, dialog, timeout_ms)
     _wait_for_new_job(page, job_name, before_count, timeout_ms)
     return job_name, time.time() - started
-
-
-def run_workbench_job(page, home_url, script_path=DEFAULT_WORKBENCH_JOB_SCRIPT, session_name=None,
-                      wait_for_completion=True, timeout_ms=600000):
-    """Launch a new session, then start `script_path` as a Workbench job.
-
-    With wait_for_completion, waits for the job to reach a final state and
-    raises AssertionError if it failed.
-
-    Returns WorkbenchJobRun(session_launch, job_name, submit_elapsed_s,
-    elapsed_s, status): submit_elapsed_s runs from clicking Start to the job
-    appearing, elapsed_s from clicking Start to its final state (None and
-    status None when not waiting).
-    """
-    session_launch = launch_new_session(page, home_url, session_name=session_name)
-
-    started = time.time()
-    job_name, submit_elapsed = start_workbench_job(page, script_path)
-
-    if not wait_for_completion:
-        return WorkbenchJobRun(session_launch, job_name, submit_elapsed, None, None)
-
-    status = wait_for_job_status(page, job_name, timeout_ms=timeout_ms)
-    elapsed = time.time() - started
-    assert status not in locators.WORKBENCH_JOB_FAILED_STATES, (
-        "Workbench job %r ended as %s" % (job_name, status)
-    )
-    return WorkbenchJobRun(session_launch, job_name, submit_elapsed, elapsed, status)
 
 
 def launch_sessions_and_start_jobs(context, home_url, session_count, script_path=DEFAULT_WORKBENCH_JOB_SCRIPT):
@@ -281,7 +267,7 @@ def launch_sessions_and_source_script(context, home_url, session_count, script_p
     source `script_path` in the console and close the tab without waiting for
     the script to finish.
     """
-    source_command = "source(%s)" % r_string(script_path)
+    source_command = r_source_command(script_path)
     for _ in range(session_count):
         tab = context.new_page()
         try:
@@ -300,10 +286,10 @@ def launch_sessions_and_source_script(context, home_url, session_count, script_p
             tab.close()
 
 
-def _check_output_file(page, record, output_path, delete=False, remove_dir=None):
-    """Set record["status"] to an error unless `output_path` exists. With
-    `delete`, then delete it, and remove the folder `remove_dir` (when given)
-    if that leaves it empty.
+def check_output_file(page, record, output_path, delete=False, remove_dir=None):
+    """After a finished run: set record["status"] to an error unless
+    `output_path` exists. With `delete`, then delete it, and remove the
+    folder `remove_dir` (when given) if that leaves it empty.
     """
     try:
         size = get_file_size(page, output_path)
@@ -332,6 +318,34 @@ def _check_output_file(page, record, output_path, delete=False, remove_dir=None)
         record["status"] = "could not delete %s: %s" % (output_path, exc)
 
 
+def report_output_file(page, record, output_path):
+    """After a timed-out run: print the console tail and whether
+    `output_path` exists yet.
+    Interrupts R first (Escape in the console) so it can answer; the file is
+    left in place since the script may still have been writing it.
+    """
+    try:
+        console = page.locator(locators.CONSOLE_OUTPUT_SELECTOR).inner_text()
+        print("\n[rstudio-local] session %s: console at the timeout (last 40 lines):\n%s"
+              % (record["session_name"], "\n".join(console.splitlines()[-40:])))
+    except Exception as exc:
+        print("\n[rstudio-local] session %s: could not read the console: %s" % (record["session_name"], exc))
+    try:
+        page.locator(locators.CONSOLE_INPUT_SELECTOR).first.click(force=True)
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(2000)
+        size = get_file_size(page, output_path)
+    except Exception as exc:
+        print("\n[rstudio-local] session %s: could not check %s: %s" % (record["session_name"], output_path, exc))
+        return
+    if size is None:
+        print("\n[rstudio-local] session %s: %s was not created before the timeout"
+              % (record["session_name"], output_path))
+    else:
+        print("\n[rstudio-local] session %s: %s exists at the timeout, %d bytes (not deleted)"
+              % (record["session_name"], output_path, size))
+
+
 def launch_sessions_and_run_script(context, home_url, session_count, script_path=DEFAULT_WORKBENCH_JOB_SCRIPT,
                                    working_dir=None, timeout_ms=1800000, poll_interval_ms=500, output_path=None,
                                    per_session_dir=False, delete_output=False):
@@ -340,77 +354,62 @@ def launch_sessions_and_run_script(context, home_url, session_count, script_path
     With per_session_dir, each session instead gets its own
     `working_dir`/<session name> folder (created if missing), so sessions
     writing the same relative file don't overwrite each other.
-    Once every session is up, source `script_path` in each console (into a
-    fresh environment, not the global one) and poll
-    the tabs in turn until every run has finished or timed out, so the
-    scripts run concurrently. With `output_path` (relative paths resolve
-    against the session's working directory), a run only counts as "ok" if
-    that file exists once the script has finished; with delete_output it is
-    then deleted (and the per-session folder too, if left empty). Tabs are
-    closed before returning.
 
-    Returns one record per session in the common.script_timings format
-    ("session_name", "started", "ended", "status"), status "ok", "timed out"
-    or the error.
+    Once every session is up, source `script_path` in each console (into a
+    fresh environment, not the global one) and wait for all runs together,
+    so the scripts run concurrently. With `output_path` (relative paths
+    resolve against the session's working directory), a run only counts as
+    "ok" if that file exists once the script has finished; with
+    delete_output it is then deleted (and the per-session folder too, if
+    left empty). Tabs are closed before returning.
+
+    Returns one run record per session (see common.script_timings).
     """
     if per_session_dir and not working_dir:
         raise ValueError("per_session_dir needs a working_dir")
     # Source into a throwaway environment: scripts that leave very many
     # objects in the global environment (sample_100mb.R) keep R busy for
     # minutes refreshing RStudio's Environment pane after they return, so
-    # the output-file check below never gets a reply.
-    source_command = "source(%s, local=new.env())" % r_string(script_path)
-    tabs, runs, session_dirs, pending = [], [], [], []
+    # the output-file check below never gets a reply. The start/finish
+    # messages show in the console when the script began and returned.
+    source_command = (
+        "message('Script execution started at: ', Sys.time()); "
+        "source(%s, local=new.env()); "
+        "message('Script execution finished at: ', Sys.time())" % r_string(script_path)
+    )
+    tabs, runs, ready = [], [], []
     try:
         for i in range(session_count):
             tab = context.new_page()
             tabs.append(tab)
-            record = {"session_name": "session %d" % (i + 1), "started": None, "ended": None, "status": "not run"}
+            record = new_run_record("session %d" % (i + 1))
             runs.append(record)
-            session_dirs.append(None)
             try:
                 launch = launch_new_session(tab, home_url)
                 record["session_name"] = launch.session_name
-                if per_session_dir:
-                    session_dirs[i] = posixpath.join(working_dir, launch.session_name)
-                    create_folder(tab, session_dirs[i])
-                set_session_working_directory(tab, path=session_dirs[i] or working_dir)
+                session_dir = posixpath.join(working_dir, launch.session_name) if per_session_dir else None
+                if session_dir:
+                    create_folder(tab, session_dir)
+                set_session_working_directory(tab, path=session_dir or working_dir)
+                ready.append((tab, record, session_dir))
                 print("\n[rstudio-local] session %s launched in %.2fs" % (launch.session_name, launch.elapsed_s))
             except Exception as exc:
                 record["status"] = "launch failed: %s" % exc
 
-        for tab, record, session_dir in zip(tabs, runs, session_dirs):
-            if record["status"] != "not run":
-                continue
-            try:
-                marker, record["started"] = submit_console_command(tab, source_command)
-                pending.append((tab, marker, record, session_dir))
-            except Exception as exc:
-                record["status"] = "submit failed: %s" % exc
+        def _on_done(tab, record, session_dir):
+            print("\n[rstudio-local] session %s: %s took %.2fs"
+                  % (record["session_name"], script_path, record["ended"] - record["started"]))
+            if output_path:
+                check_output_file(tab, record, output_path, delete=delete_output, remove_dir=session_dir)
 
-        while pending:
-            for item in list(pending):
-                tab, marker, record, session_dir = item
-                try:
-                    done = is_console_command_done(tab, marker)
-                except Exception as exc:
-                    record["status"] = str(exc)
-                    pending.remove(item)
-                    continue
-                if done:
-                    record["ended"], record["status"] = time.time(), "ok"
-                    pending.remove(item)
-                    print(
-                        "\n[rstudio-local] session %s: %s took %.2fs"
-                        % (record["session_name"], source_command, record["ended"] - record["started"])
-                    )
-                    if output_path:
-                        _check_output_file(tab, record, output_path, delete=delete_output, remove_dir=session_dir)
-                elif time.time() - record["started"] >= timeout_ms / 1000.0:
-                    record["status"] = "timed out"
-                    pending.remove(item)
-            if pending:
-                pending[0][0].wait_for_timeout(poll_interval_ms)
+        def _on_timeout(tab, record, session_dir):
+            if output_path:
+                report_output_file(tab, record, output_path)
+
+        wait_for_console_runs(
+            submit_in_each(ready, source_command), timeout_ms, poll_interval_ms,
+            on_done=_on_done, on_timeout=_on_timeout,
+        )
     finally:
         for tab in tabs:
             tab.close()

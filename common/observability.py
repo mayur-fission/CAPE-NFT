@@ -1,5 +1,8 @@
-﻿"""Local observability stack: Prometheus scrapes the OTel exporter from
-common/otel_metrics.py, and Grafana graphs it on a provisioned dashboard.
+"""Optional local observability stack, run by hand rather than by the tests:
+Prometheus scrapes the OTel exporter from common/otel_metrics.py and Grafana
+graphs it on a provisioned dashboard. Call
+otel_metrics.enable_prometheus_metrics_export() and record some metrics,
+then start_observability_stack().
 
 Starts real local processes; expects `prometheus` and `grafana` on PATH.
 """
@@ -11,21 +14,22 @@ import webbrowser
 import requests
 import yaml
 
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_PROMETHEUS_CONFIG_PATH = os.path.join(_REPO_ROOT, "evidence", "prometheus.yml")
-DEFAULT_PROMETHEUS_DATA_DIR = os.path.join(_REPO_ROOT, "evidence", "prometheus-data")
-PROMETHEUS_LOG_PATH = os.path.join(_REPO_ROOT, "evidence", "prometheus.log")
-GRAFANA_LOG_PATH = os.path.join(_REPO_ROOT, "evidence", "grafana.log")
+from common.config import EVIDENCE_DIR
+
+DEFAULT_PROMETHEUS_CONFIG_PATH = os.path.join(EVIDENCE_DIR, "prometheus.yml")
+DEFAULT_PROMETHEUS_DATA_DIR = os.path.join(EVIDENCE_DIR, "prometheus-data")
+PROMETHEUS_LOG_PATH = os.path.join(EVIDENCE_DIR, "prometheus.log")
+GRAFANA_LOG_PATH = os.path.join(EVIDENCE_DIR, "grafana.log")
+DASHBOARD_TITLE = "RStudio Session Launch Performance"
 
 
 def _popen_logging_to(cmd, log_path):
-    # Output goes to a file, not a PIPE: nothing here reads a pipe, and a
-    # long-running server blocks on write once the pipe buffer fills.
+    """Start `cmd` with its output appended to `log_path`. A file, not a
+    PIPE: nothing reads a pipe, and a long-running server blocks on write
+    once the pipe buffer fills."""
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     with open(log_path, "ab") as log:
         return subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT)
-
-DASHBOARD_TITLE = "RStudio Session Launch Performance"
 
 
 # -- Prometheus ---------------------------------------------------------
@@ -148,6 +152,7 @@ def start_grafana_server(binary="grafana", port=3000, homepath=None, startup_tim
 
 
 def _guess_scoop_grafana_homepath():
+    """Grafana's scoop install root, if it exists."""
     candidate = os.path.expanduser(r"~\scoop\apps\grafana\current")
     return candidate if os.path.isdir(candidate) else None
 

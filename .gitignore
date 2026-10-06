@@ -1,11 +1,20 @@
+# Python and tooling
 .venv/
 vendor/
 __pycache__/
 *.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Secrets
 .env
-evidence/locust/*
-evidence/junit/*
-evidence/pack_*
-evidence/allure-results/*
-evidence/allure-report/*
+
+# Test results: reports, timings, Allure output, metrics data, logs
+evidence/*
 !evidence/.gitkeep
+test-results/
+*.log
+
+# Files the tests generate in testdata/ (the input CSVs stay tracked)
+testdata/session_ids_U*.csv
+testdata/session_projects_U*.xlsx

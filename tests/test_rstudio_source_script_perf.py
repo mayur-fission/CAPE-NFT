@@ -1,18 +1,19 @@
-﻿"""Source a large R script in already-existing RStudio Pro session(s) - one
+"""Source a large R script in already-existing RStudio Pro session(s) - one
 (SESSION_NAME) or CONCURRENT_SESSION_NAMES at once, each in its own isolated
 browser - and capture run time plus best-effort server/DB metrics.
 
 Every session named must already be on the session list, with the sourced
-script (default sample_10mb.R) in its working directory; nothing is created.
+script (default sample_10mb.R) in WORKING_DIR; nothing is created.
 """
 import pytest
 
-from common.config import env
+from common.config import env, env_list
 from common.helper_function import (
     capture_server_and_db_metrics,
     describe_script_runs,
     failed,
     is_headless,
+    login_and_snapshot,
     mean,
     optional_int,
     otel_sample,
@@ -25,14 +26,9 @@ from common.script_timings import (
     script_timings_csv_path,
     write_script_timings_csv,
 )
-from common.session_actions import (
-    login_to_posit_workbench,
-    open_existing_session,
-    set_session_working_directory,
-)
+from common.session_actions import open_existing_session, set_session_working_directory
 from common.session_cleanup import cleanup_and_verify_sessions
 from common.session_concurrent import concurrent_source_script
-from common.rstudio_session_helper import row_ids
 
 pytestmark = pytest.mark.rstudio_local
 
@@ -40,25 +36,28 @@ SESSION_NAME = env("RSTUDIO_SCRIPT_SESSION_NAME", "AUTO_SESSION_1")
 SOURCE_COMMAND = env("RSTUDIO_SCRIPT_SOURCE_COMMAND", "source('sample_10mb.R')")
 SCRIPT_TIMEOUT_MS = int(env("RSTUDIO_SCRIPT_TIMEOUT_MS", "300000"))
 METRICS_WINDOW_MINUTES = int(env("RSTUDIO_METRICS_WINDOW_MINUTES", "5"))
-WORKING_DIR = '/fsx/data/batch_mayur'
+WORKING_DIR = env("RSTUDIO_SCRIPT_WORKING_DIR", "/home/posit")
 
 # Concurrent variant: RSTUDIO_SCRIPT_SESSION_NAMES (comma-separated) overrides
 # the default AUTO_SESSION_1..RSTUDIO_CONCURRENT_USERS list.
 CONCURRENT_USERS = int(env("RSTUDIO_CONCURRENT_USERS", "3"))
-_CONCURRENT_SESSION_NAMES_OVERRIDE = env("RSTUDIO_SCRIPT_SESSION_NAMES")
-CONCURRENT_SESSION_NAMES = (
-    [name.strip() for name in _CONCURRENT_SESSION_NAMES_OVERRIDE.split(",") if name.strip()]
-    if _CONCURRENT_SESSION_NAMES_OVERRIDE
-    else ["AUTO_SESSION_%d" % (i + 1) for i in range(CONCURRENT_USERS)]
+CONCURRENT_SESSION_NAMES = env_list(
+    "RSTUDIO_SCRIPT_SESSION_NAMES",
+    ["AUTO_SESSION_%d" % (i + 1) for i in range(CONCURRENT_USERS)],
 )
 REQUESTS_PER_USER = int(env("RSTUDIO_REQUESTS_PER_USER", "1"))
 THINK_TIME_SECONDS = float(env("RSTUDIO_THINK_TIME_SECONDS", "0"))
 CONCURRENT_MAX_WORKERS = env("RSTUDIO_CONCURRENT_MAX_WORKERS")
 
 
-def test_rstudio_source_large_script_performance(page):
-    home_url = login_to_posit_workbench(page)
-    before_ids = row_ids(page)
+def test_existing_session_source_large_script_time(page):
+    """SESSION_NAME sources SOURCE_COMMAND once; the run is timed.
+    Writes evidence/rstudio_script_timings_source_large_script.csv.
+
+    Flow: login -> open existing session -> setwd -> run script -> capture
+    metrics -> quit any session the run created
+    """
+    home_url, before_ids = login_and_snapshot(page)
     script_runs = []
 
     try:
@@ -86,12 +85,17 @@ def test_rstudio_source_large_script_performance(page):
         cleanup_and_verify_sessions(page, home_url, before_ids)
 
 
-def test_rstudio_source_script_concurrent_users_performance(page, request):
-    """One user per CONCURRENT_SESSION_NAMES entry, each in its own browser,
-    sources SOURCE_COMMAND REQUESTS_PER_USER times at once, with
-    THINK_TIME_SECONDS between runs."""
-    home_url = login_to_posit_workbench(page)
-    before_ids = row_ids(page)
+def test_existing_sessions_source_script_concurrently_time(page, request):
+    """One user per CONCURRENT_SESSION_NAMES entry, each in their own browser,
+    sources SOURCE_COMMAND REQUESTS_PER_USER times at the same time, pausing
+    THINK_TIME_SECONDS between runs.
+    Writes evidence/rstudio_script_timings_source_script_concurrent_users.csv.
+
+    Flow: login -> per session in parallel: open browser -> login -> open
+    existing session -> setwd -> run script -> capture metrics -> quit any
+    session the run created
+    """
+    home_url, before_ids = login_and_snapshot(page)
     script_runs = []
 
     try:

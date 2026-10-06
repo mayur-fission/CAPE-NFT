@@ -1,22 +1,24 @@
-locust==2.31.8
+# Test runner and browser automation. After installing, run:
+#   playwright install chromium
 pytest==8.3.3
+pytest-playwright==0.8.0
+playwright==1.60.0
+python-dotenv==1.2.2
+
+# Workbench API calls and testdata/ files (common/api_helper.py)
 requests==2.32.3
 openpyxl==3.1.5
-PyYAML==6.0.2
-boto3==1.35.36
 
-# local-only: tests/test_rstudio_sessions.py (RStudio Workbench has no
-# documented public REST endpoint for session creation, so this drives a
-# real browser instead). Run `playwright install chromium` after installing.
-playwright==1.47.0
-pytest-playwright==0.5.2
-python-dotenv==1.0.1
+# Reports: Allure steps/attachments (config/perf_report.py)
 allure-pytest==2.13.5
 
-# metrics capture for the RStudio perf tests (common/otel_metrics.py) and
-# the local Prometheus/Grafana stack it feeds (common/observability.py)
+# Metrics (optional - tests pass without a backend):
+# OTel metrics (common/otel_metrics.py) and the local Prometheus/Grafana
+# stack it feeds (common/observability.py, which also needs PyYAML)
 opentelemetry-api==1.44.0
 opentelemetry-sdk==1.44.0
 opentelemetry-exporter-otlp-proto-http==1.44.0
 opentelemetry-exporter-prometheus==0.65b0
-# observability.py also uses requests and PyYAML, both already pinned above
+PyYAML==6.0.3
+# CloudWatch server/DB snapshots (common/cloudwatch_metrics.py)
+boto3==1.35.36

@@ -1,24 +1,30 @@
-"""Functional check: multiple RStudio Pro sessions can be created and each
-reaches an active IDE; records per-session launch time and force-quits every
-session it created.
+"""Functional check: RSTUDIO_SESSION_COUNT new RStudio Pro sessions, launched
+one after another, each reach an active IDE. Records per-session launch time
+and force-quits every session created.
 """
 import pytest
 
 from common.config import env
-from common.helper_function import format_timings
-from common.session_actions import launch_session, login_to_posit_workbench
+from common.helper_function import format_timings, login_and_plan_session_names
+from common.rstudio_session_helper import AUTO_PERF_NAME_PREFIX, is_session_alive
+from common.session_actions import launch_session
 from common.session_cleanup import cleanup_and_verify_sessions
-from common.rstudio_session_helper import is_session_alive, next_auto_perf_session_names, row_ids
 
 pytestmark = pytest.mark.rstudio_local
 
 SESSION_COUNT = int(env("RSTUDIO_SESSION_COUNT", "10"))
 
 
-def test_create_multiple_session_and_launch(page):
-    home_url = login_to_posit_workbench(page)
-    before_ids = row_ids(page)
-    session_names = next_auto_perf_session_names(page, SESSION_COUNT, home_url=home_url)
+def test_multiple_new_sessions_reach_active_ide(page):
+    """SESSION_COUNT new sessions, launched one after another, each open
+    their IDE; prints every launch time.
+
+    Flow: login -> reserve AUTO_PERF_SESSION_<N> names -> launch each session
+    in turn -> check its IDE is active -> quit sessions
+    """
+    home_url, before_ids, session_names = login_and_plan_session_names(
+        page, AUTO_PERF_NAME_PREFIX, SESSION_COUNT
+    )
 
     timings = []
     try:

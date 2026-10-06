@@ -1,5 +1,5 @@
-"""R console automation: running commands and inspecting the session's
-filesystem.
+"""R console automation: run commands (blocking or not), read values back
+and inspect the session's filesystem.
 
 Results are read back from the console output text, tagged with a unique
 marker that R assembles via paste0() - so the marker only appears once R
@@ -36,6 +36,7 @@ def r_string(value):
 
 
 def _type_command(page, command):
+    """Type `command` into the console input and press Enter."""
     page.locator(locators.CONSOLE_INPUT_SELECTOR).first.click(force=True)
     page.keyboard.type(command)
     page.keyboard.press("Enter")
@@ -93,36 +94,15 @@ def _read_console_block(page, r_statements, timeout_ms, what):
     )
 
 
+def r_source_command(script_path):
+    """R command that source()s `script_path`."""
+    return "source(%s)" % r_string(script_path)
+
+
 def get_file_size(page, path, timeout_ms=10000):
     """Size of `path` in bytes, or None if it doesn't exist."""
     value = read_console_value(page, 'format(file.size(%s), scientific=FALSE)' % r_string(path), timeout_ms)
     return None if value == "NA" else int(value)
-
-
-def get_folder_size(page, path, recursive=True, timeout_ms=15000):
-    """Total size in bytes of the files under `path` (0 if empty). Unreadable
-    entries are skipped.
-    """
-    r_expr = (
-        'format(sum(file.info(list.files(%s, full.names=TRUE, recursive=%s))$size, na.rm=TRUE), '
-        "scientific=FALSE)" % (r_string(path), "TRUE" if recursive else "FALSE")
-    )
-    return int(read_console_value(page, r_expr, timeout_ms))
-
-
-def get_file_count(page, path, recursive=False, timeout_ms=10000):
-    """Number of files in `path` (0 if empty or missing). recursive=True
-    includes subdirectories.
-    """
-    r_expr = 'format(length(list.files(%s, recursive=%s)), scientific=FALSE)' % (
-        r_string(path), "TRUE" if recursive else "FALSE"
-    )
-    return int(read_console_value(page, r_expr, timeout_ms))
-
-
-def check_file_exists(page, path, timeout_ms=10000):
-    """Whether `path` exists on the session's filesystem."""
-    return read_console_value(page, 'format(file.exists(%s))' % r_string(path), timeout_ms) == "TRUE"
 
 
 _FILE_LIST_SEPARATOR = "@@AUTO_PERF_SEP@@"
@@ -137,23 +117,6 @@ def get_file_list(page, path, recursive=False, timeout_ms=15000):
     )
     body = _read_console_block(page, r_statements, timeout_ms, "file list for %r" % path).strip()
     return body.split(_FILE_LIST_SEPARATOR) if body else []
-
-
-def get_file_content(page, path, timeout_ms=10000):
-    """Text content of `path`, lines joined with "\n" (a trailing newline is
-    not preserved). Raises RuntimeError on timeout or if `path` doesn't exist.
-    """
-    r_statements = "cat(paste(readLines(%s), collapse='\\n'))" % r_string(path)
-    return _read_console_block(page, r_statements, timeout_ms, "file content for %r" % path)
-
-
-def verify_file_content(page, path, expected_content, timeout_ms=10000):
-    """Assert that `path` contains `expected_content` and return it."""
-    actual_content = get_file_content(page, path, timeout_ms=timeout_ms)
-    assert actual_content == expected_content, (
-        "file content is %r, expected %r" % (actual_content, expected_content)
-    )
-    return actual_content
 
 
 def submit_console_command(page, command):
@@ -175,7 +138,7 @@ def submit_console_command(page, command):
 
 def is_console_command_done(page, marker):
     """Non-blocking check for whether `marker` has appeared in the console."""
-    return marker in page.locator(locators.CONSOLE_OUTPUT_SELECTOR).inner_text()
+    return marker in get_console_output(page)
 
 
 def wait_for_console_command(page, marker, started, timeout_ms=300000, poll_interval_ms=500):
@@ -197,6 +160,33 @@ def wait_for_console_command(page, marker, started, timeout_ms=300000, poll_inte
     )
 
 
+def wait_for_console_ready(page, timeout_ms=120000, probe_interval_ms=15000, poll_interval_ms=500):
+    """Wait until the console has loaded and R answers commands, and return
+    the seconds waited.
+
+    Waits for the console input, then sends a no-op probe and waits for R
+    to print its marker - which only happens once R is idle, e.g. after a
+    resumed session has restored its workspace. The probe is re-sent every
+    probe_interval_ms in case its keystrokes were lost while the console
+    was still starting up. Raises RuntimeError on timeout.
+    """
+    started = time.time()
+    deadline = started + timeout_ms / 1000.0
+    page.locator(locators.CONSOLE_INPUT_SELECTOR).first.wait_for(state="visible", timeout=timeout_ms)
+
+    markers = []
+    while time.time() < deadline:
+        markers.append(submit_console_command(page, "invisible(NULL)")[0])
+        probe_deadline = min(deadline, time.time() + probe_interval_ms / 1000.0)
+        while time.time() < probe_deadline:
+            output = page.locator(locators.CONSOLE_OUTPUT_SELECTOR).inner_text()
+            if any(marker in output for marker in markers):
+                return time.time() - started
+            page.wait_for_timeout(poll_interval_ms)
+
+    raise RuntimeError("console did not become ready within %dms" % timeout_ms)
+
+
 def run_console_command(page, command, timeout_ms=300000, poll_interval_ms=500):
     """Run `command` in the console, wait for it to finish, and return the
     elapsed seconds.
@@ -214,12 +204,3 @@ def run_console_command(page, command, timeout_ms=300000, poll_interval_ms=500):
 def get_console_output(page):
     """Full text currently in the console output pane."""
     return page.locator(locators.CONSOLE_OUTPUT_SELECTOR).inner_text()
-
-
-def run_r_script(page, script_path, timeout_ms=300000, poll_interval_ms=500):
-    """source() `script_path` in the console and return the elapsed seconds.
-    Raises RuntimeError on timeout (including if the script errors).
-    """
-    return run_console_command(
-        page, 'source(%s)' % r_string(script_path), timeout_ms=timeout_ms, poll_interval_ms=poll_interval_ms
-    )

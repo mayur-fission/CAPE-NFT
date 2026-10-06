@@ -1,241 +1,117 @@
-"""Run sessions truly in parallel, each worker in its own isolated
-Playwright browser (the sync API can't be shared across threads).
-Simulates several users at once; logins are staggered so they don't
-collide.
+"""Run sessions truly in parallel to simulate several users at once. Each
+worker drives its own isolated Playwright browser (the sync API can't be
+shared across threads), and logins are staggered so they don't collide.
 
-Workers retry the whole flow up to _LAUNCH_ATTEMPTS times, reusing their
+Workers retry their whole flow up to LAUNCH_ATTEMPTS times, reusing their
 reserved session name. Callers diff row ids and clean up afterwards.
 """
 import concurrent.futures
 import time
+from contextlib import contextmanager
 
 from playwright.sync_api import sync_playwright
 
-from common.config import env
-from common.rstudio_text_operations import create_text_file as _create_text_file
-from common.rstudio_session_helper import next_auto_perf_session_names as _next_auto_perf_session_names
+from common.config import default_session_count, env, max_workers_for
+from common.rstudio_session_helper import next_auto_perf_session_names
+from common.rstudio_text_operations import create_text_file
+from common.script_timings import run_timed_console_command_repeatedly
+from common.session_actions import (
+    launch_session,
+    login_to_posit_workbench,
+    open_existing_session,
+    set_session_working_directory,
+)
+from common.session_retry import result_with_retries, stagger_login
+from common.session_scenarios import (
+    default_run_script_command,
+    default_run_script_timeout_ms,
+    launch_with_project_and_text_file,
+    launch_with_project_and_text_files,
+    next_run_r_session_names,
+)
 
-from common.script_timings import run_timed_console_command
-from common.session_actions import login_to_posit_workbench
-from common.session_actions import launch_session
-from common.session_actions import open_existing_session
-from common.session_actions import set_session_working_directory
-from common.session_scenarios import launch_with_project_and_text_file
-from common.session_scenarios import launch_with_project_and_text_files
-from common.session_scenarios import next_run_r_session_names
-from common.session_retry import _LAUNCH_ATTEMPTS
-from common.session_retry import _retry_backoff_s
-from common.session_retry import _stagger_login
 
-
-def _launch_session_isolated(index, session_name):
-    """Worker for concurrent_launch_sessions(): log in, launch `session_name`
-    and set its working directory in a headless browser.
-    """
-    last_exc = None
-    for attempt in range(_LAUNCH_ATTEMPTS):
+@contextmanager
+def _isolated_session_list(headless=True):
+    """Yield (page, home_url): a fresh browser of its own, logged in (after
+    stagger_login()) and showing the session list. Closed on exit."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=headless, args=["--start-maximized"])
         try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
-                try:
-                    context = browser.new_context(ignore_https_errors=True)
-                    page = context.new_page()
-                    _stagger_login()
-                    home_url = login_to_posit_workbench(page)
-                    launch = launch_session(page, home_url, session_name=session_name)
-                    set_session_working_directory(page)
-                    if attempt:
-                        print("[rstudio-local] session %d (%s) launched on attempt %d/%d"
-                              % (index, session_name, attempt + 1, _LAUNCH_ATTEMPTS))
-                    return {
-                        "index": index,
-                        "ok": True,
-                        "elapsed_s": launch.elapsed_s,
-                        "bytes_received": launch.bytes_received,
-                        "session_name": launch.session_name,
-                        "attempts": attempt + 1,
-                    }
-                finally:
-                    browser.close()
-        except Exception as exc:
-            last_exc = exc
-            print("[rstudio-local] session %d (%s) attempt %d/%d failed: %s"
-                  % (index, session_name, attempt + 1, _LAUNCH_ATTEMPTS, exc))
-            if attempt + 1 < _LAUNCH_ATTEMPTS:
-                time.sleep(_retry_backoff_s(attempt))
-
-    return {
-        "index": index,
-        "ok": False,
-        "error": str(last_exc),
-        "session_name": session_name,
-        "attempts": _LAUNCH_ATTEMPTS,
-    }
+            context = browser.new_context(ignore_https_errors=True, no_viewport=not headless)
+            page = context.new_page()
+            stagger_login()
+            yield page, login_to_posit_workbench(page)
+        finally:
+            browser.close()
 
 
-def concurrent_launch_sessions(page, count=None, max_workers=None):
-    """Launch `count` sessions (default RSTUDIO_SESSION_COUNT) in parallel.
-
-    `page` must be logged in; it's only used to reserve names up front.
-    max_workers defaults to RSTUDIO_CONCURRENT_MAX_WORKERS, else `count`.
-
-    Returns (results, run_elapsed_s), results in index order.
-    """
-    if count is None:
-        count = int(env("RSTUDIO_SESSION_COUNT", "10"))
-    env_max_workers = env("RSTUDIO_CONCURRENT_MAX_WORKERS")
-    workers = max(1, max_workers or (int(env_max_workers) if env_max_workers else None) or count)
-
-    session_names = _next_auto_perf_session_names(page, count)
-
+def _run_in_parallel(session_names, worker, workers):
+    """worker(index, session_name) for every name on `workers` threads, each
+    wrapped in result_with_retries(). Returns (results in index order,
+    run_elapsed_s)."""
     run_started = time.time()
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [
-            executor.submit(_launch_session_isolated, i + 1, session_names[i])
-            for i in range(count)
+            executor.submit(
+                result_with_retries, i + 1, name,
+                lambda _attempt, i=i, name=name: worker(i + 1, name),
+                "user %d (%s)" % (i + 1, name),
+            )
+            for i, name in enumerate(session_names)
         ]
         results = [f.result() for f in futures]
-    run_elapsed = time.time() - run_started
-
-    results.sort(key=lambda r: r["index"])
-    return results, run_elapsed
+    return sorted(results, key=lambda r: r["index"]), time.time() - run_started
 
 
-def _launch_with_project_and_text_file_isolated(
-    index, session_name, working_dir=None, content=None, folder=None, file_name=None, headless=True
-):
-    """Worker for concurrent_launch_with_project_and_text_file(): run
-    launch_with_project_and_text_file() in its own browser.
+def concurrent_launch_sessions(page, count=None, max_workers=None):
+    """Launch `count` new sessions (default RSTUDIO_SESSION_COUNT) in
+    parallel, each setting its working directory. `page` must be logged in;
+    it only reserves the names. max_workers defaults to
+    RSTUDIO_CONCURRENT_MAX_WORKERS, else one per session.
+
+    Returns (results, run_elapsed_s); results carry "elapsed_s" and
+    "bytes_received" on success.
     """
-    last_exc = None
-    for attempt in range(_LAUNCH_ATTEMPTS):
-        try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=headless)
-                try:
-                    context = browser.new_context(ignore_https_errors=True)
-                    page = context.new_page()
-                    _stagger_login()
-                    home_url = login_to_posit_workbench(page)
-                    outcome = launch_with_project_and_text_file(
-                        page, home_url, session_name=session_name,
-                        working_dir=working_dir, content=content, folder=folder, file_name=file_name,
-                    )
-                    if attempt:
-                        print("[rstudio-local] user %d (%s) completed on attempt %d/%d"
-                              % (index, session_name, attempt + 1, _LAUNCH_ATTEMPTS))
-                    return {
-                        "index": index,
-                        "ok": True,
-                        "session_name": session_name,
-                        "launch_elapsed_s": outcome.launch.elapsed_s,
-                        "project_elapsed_s": outcome.project.elapsed_s,
-                        "text_file_elapsed_s": outcome.text_file.elapsed_s,
-                        "bytes_received": outcome.launch.bytes_received,
-                        "attempts": attempt + 1,
-                    }
-                finally:
-                    browser.close()
-        except Exception as exc:
-            last_exc = exc
-            print("[rstudio-local] user %d (%s) attempt %d/%d failed: %s"
-                  % (index, session_name, attempt + 1, _LAUNCH_ATTEMPTS, exc))
-            if attempt + 1 < _LAUNCH_ATTEMPTS:
-                time.sleep(_retry_backoff_s(attempt))
+    count = count or default_session_count()
 
-    return {
-        "index": index,
-        "ok": False,
-        "error": str(last_exc),
-        "session_name": session_name,
-        "attempts": _LAUNCH_ATTEMPTS,
-    }
+    def _worker(index, session_name):
+        with _isolated_session_list() as (worker_page, home_url):
+            launch = launch_session(worker_page, home_url, session_name=session_name)
+            set_session_working_directory(worker_page)
+            return {"elapsed_s": launch.elapsed_s, "bytes_received": launch.bytes_received}
+
+    return _run_in_parallel(next_auto_perf_session_names(page, count), _worker, max_workers_for(count, max_workers))
 
 
 def concurrent_launch_with_project_and_text_file(
     page, count=None, max_workers=None, working_dir=None, content=None, folder=None, file_name=None,
     headless=True,
 ):
-    """launch_with_project_and_text_file() for `count` users in parallel.
+    """launch_with_project_and_text_file() for `count` users (default
+    RSTUDIO_SESSION_COUNT) in parallel. Names are reserved up front from
+    `page` (once a session has a project its row shows the project name, so
+    names can't be scanned later).
 
-    Names are reserved up front from `page` (a session's row shows its
-    project name once one exists, so names can't be scanned later). Other
-    options pass through to each worker.
-
-    Returns (results, run_elapsed_s), results in index order.
+    Returns (results, run_elapsed_s); results carry "launch_elapsed_s",
+    "project_elapsed_s", "text_file_elapsed_s" and "bytes_received".
     """
-    if count is None:
-        count = int(env("RSTUDIO_SESSION_COUNT", "10"))
-    env_max_workers = env("RSTUDIO_CONCURRENT_MAX_WORKERS")
-    workers = max(1, max_workers or (int(env_max_workers) if env_max_workers else None) or count)
+    count = count or default_session_count()
 
-    session_names = _next_auto_perf_session_names(page, count)
-
-    run_started = time.time()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = [
-            executor.submit(
-                _launch_with_project_and_text_file_isolated, i + 1, session_names[i],
-                working_dir, content, folder, file_name, headless,
+    def _worker(index, session_name):
+        with _isolated_session_list(headless) as (worker_page, home_url):
+            outcome = launch_with_project_and_text_file(
+                worker_page, home_url, session_name=session_name,
+                working_dir=working_dir, content=content, folder=folder, file_name=file_name,
             )
-            for i in range(count)
-        ]
-        results = [f.result() for f in futures]
-    run_elapsed = time.time() - run_started
+            return {
+                "launch_elapsed_s": outcome.launch.elapsed_s,
+                "project_elapsed_s": outcome.project.elapsed_s,
+                "text_file_elapsed_s": outcome.text_file.elapsed_s,
+                "bytes_received": outcome.launch.bytes_received,
+            }
 
-    results.sort(key=lambda r: r["index"])
-    return results, run_elapsed
-
-
-def _launch_with_project_and_text_files_isolated(
-    index, session_name, working_dir=None, content=None, folder=None, file_count=1, headless=True
-):
-    """Worker for concurrent_launch_with_project_and_text_files(): run
-    launch_with_project_and_text_files() in its own browser.
-    """
-    last_exc = None
-    for attempt in range(_LAUNCH_ATTEMPTS):
-        try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=headless)
-                try:
-                    context = browser.new_context(ignore_https_errors=True)
-                    page = context.new_page()
-                    _stagger_login()
-                    home_url = login_to_posit_workbench(page)
-                    outcome = launch_with_project_and_text_files(
-                        page, home_url, session_name=session_name,
-                        working_dir=working_dir, content=content, folder=folder, file_count=file_count,
-                    )
-                    if attempt:
-                        print("[rstudio-local] user %d (%s) completed on attempt %d/%d"
-                              % (index, session_name, attempt + 1, _LAUNCH_ATTEMPTS))
-                    return {
-                        "index": index,
-                        "ok": True,
-                        "session_name": session_name,
-                        "launch_elapsed_s": outcome.launch.elapsed_s,
-                        "project_elapsed_s": outcome.project.elapsed_s,
-                        "text_file_elapsed_s": [tf.elapsed_s for tf in outcome.text_files],
-                        "bytes_received": outcome.launch.bytes_received,
-                        "attempts": attempt + 1,
-                    }
-                finally:
-                    browser.close()
-        except Exception as exc:
-            last_exc = exc
-            print("[rstudio-local] user %d (%s) attempt %d/%d failed: %s"
-                  % (index, session_name, attempt + 1, _LAUNCH_ATTEMPTS, exc))
-            if attempt + 1 < _LAUNCH_ATTEMPTS:
-                time.sleep(_retry_backoff_s(attempt))
-
-    return {
-        "index": index,
-        "ok": False,
-        "error": str(last_exc),
-        "session_name": session_name,
-        "attempts": _LAUNCH_ATTEMPTS,
-    }
+    return _run_in_parallel(next_auto_perf_session_names(page, count), _worker, max_workers_for(count, max_workers))
 
 
 def concurrent_launch_with_project_and_text_files(
@@ -243,312 +119,117 @@ def concurrent_launch_with_project_and_text_files(
     headless=True,
 ):
     """concurrent_launch_with_project_and_text_file(), but each user creates
-    `file_count` text files.
+    `file_count` text files; "text_file_elapsed_s" is a list per user."""
+    count = count or default_session_count()
 
-    Returns (results, run_elapsed_s); text_file_elapsed_s is a list per user.
-    """
-    if count is None:
-        count = int(env("RSTUDIO_SESSION_COUNT", "10"))
-    env_max_workers = env("RSTUDIO_CONCURRENT_MAX_WORKERS")
-    workers = max(1, max_workers or (int(env_max_workers) if env_max_workers else None) or count)
-
-    session_names = _next_auto_perf_session_names(page, count)
-
-    run_started = time.time()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = [
-            executor.submit(
-                _launch_with_project_and_text_files_isolated, i + 1, session_names[i],
-                working_dir, content, folder, file_count, headless,
+    def _worker(index, session_name):
+        with _isolated_session_list(headless) as (worker_page, home_url):
+            outcome = launch_with_project_and_text_files(
+                worker_page, home_url, session_name=session_name,
+                working_dir=working_dir, content=content, folder=folder, file_count=file_count,
             )
-            for i in range(count)
-        ]
-        results = [f.result() for f in futures]
-    run_elapsed = time.time() - run_started
+            return {
+                "launch_elapsed_s": outcome.launch.elapsed_s,
+                "project_elapsed_s": outcome.project.elapsed_s,
+                "text_file_elapsed_s": [tf.elapsed_s for tf in outcome.text_files],
+                "bytes_received": outcome.launch.bytes_received,
+            }
 
-    results.sort(key=lambda r: r["index"])
-    return results, run_elapsed
-
-
-def _source_script_isolated(
-    index, session_name, source_command, timeout_ms=300000, working_dir=None,
-    think_time_s=0.0, iterations=1, headless=True, script_runs=None,
-):
-    """Worker for concurrent_source_script(): open the existing session
-    `session_name` and run source_command `iterations` times, sleeping
-    think_time_s between runs.
-    """
-    last_exc = None
-    for attempt in range(_LAUNCH_ATTEMPTS):
-        try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=headless)
-                try:
-                    context = browser.new_context(ignore_https_errors=True)
-                    page = context.new_page()
-                    _stagger_login()
-                    home_url = login_to_posit_workbench(page)
-                    launch = open_existing_session(page, home_url, session_name)
-                    set_session_working_directory(page, path=working_dir)
-
-                    run_elapsed_s = []
-                    for i in range(iterations):
-                        run_elapsed_s.append(
-                            run_timed_console_command(
-                                page, session_name, source_command, timeout_ms, script_runs
-                            )
-                        )
-                        if think_time_s and i + 1 < iterations:
-                            time.sleep(think_time_s)
-
-                    if attempt:
-                        print("[rstudio-local] user %d (%s) completed on attempt %d/%d"
-                              % (index, session_name, attempt + 1, _LAUNCH_ATTEMPTS))
-                    return {
-                        "index": index,
-                        "ok": True,
-                        "session_name": session_name,
-                        "launch_elapsed_s": launch.elapsed_s,
-                        "run_elapsed_s": run_elapsed_s,
-                        "bytes_received": launch.bytes_received,
-                        "attempts": attempt + 1,
-                    }
-                finally:
-                    browser.close()
-        except Exception as exc:
-            last_exc = exc
-            print("[rstudio-local] user %d (%s) attempt %d/%d failed: %s"
-                  % (index, session_name, attempt + 1, _LAUNCH_ATTEMPTS, exc))
-            if attempt + 1 < _LAUNCH_ATTEMPTS:
-                time.sleep(_retry_backoff_s(attempt))
-
-    return {
-        "index": index,
-        "ok": False,
-        "error": str(last_exc),
-        "session_name": session_name,
-        "attempts": _LAUNCH_ATTEMPTS,
-    }
+    return _run_in_parallel(next_auto_perf_session_names(page, count), _worker, max_workers_for(count, max_workers))
 
 
 def concurrent_source_script(
     session_names, source_command=None, timeout_ms=None, working_dir=None,
     think_time_s=0.0, iterations=1, max_workers=None, headless=True, script_runs=None,
 ):
-    """Run source_command in each existing session in `session_names` in
-    parallel, one user per session.
+    """One user per existing session in `session_names`, in parallel: open
+    it, setwd to `working_dir` (default RSTUDIO_WORKING_DIR) and run
+    source_command (default RSTUDIO_SCRIPT_SOURCE_COMMAND) `iterations`
+    times, pausing think_time_s between runs. Every run, retries included,
+    is recorded in `script_runs`.
 
-    Sessions must already exist. Defaults come from RSTUDIO_SCRIPT_* and
-    RSTUDIO_WORKING_DIR. Every run (retries included) is recorded in
-    `script_runs` (see common/script_timings.py). Returns (results,
-    run_elapsed_s).
+    Returns (results, run_elapsed_s); results carry "launch_elapsed_s",
+    "run_elapsed_s" (one per run) and "bytes_received".
     """
     source_command = source_command or env("RSTUDIO_SCRIPT_SOURCE_COMMAND", "source('sample_10mb.R')")
     timeout_ms = timeout_ms or int(env("RSTUDIO_SCRIPT_TIMEOUT_MS", "300000"))
-    env_max_workers = env("RSTUDIO_CONCURRENT_MAX_WORKERS")
-    workers = max(1, max_workers or (int(env_max_workers) if env_max_workers else None) or len(session_names))
 
-    run_started = time.time()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = [
-            executor.submit(
-                _source_script_isolated,
-                i + 1, session_names[i], source_command, timeout_ms, working_dir,
-                think_time_s, iterations, headless, script_runs,
+    def _worker(index, session_name):
+        with _isolated_session_list(headless) as (worker_page, home_url):
+            launch = open_existing_session(worker_page, home_url, session_name)
+            set_session_working_directory(worker_page, path=working_dir)
+            run_elapsed_s = run_timed_console_command_repeatedly(
+                worker_page, session_name, source_command, timeout_ms, iterations, think_time_s, script_runs
             )
-            for i in range(len(session_names))
-        ]
-        results = [f.result() for f in futures]
-    run_elapsed = time.time() - run_started
+            return {
+                "launch_elapsed_s": launch.elapsed_s,
+                "run_elapsed_s": run_elapsed_s,
+                "bytes_received": launch.bytes_received,
+            }
 
-    results.sort(key=lambda r: r["index"])
-    return results, run_elapsed
-
-
-def _create_text_files_isolated(
-    index, session_name, file_count=1, working_dir=None, content=None, folder=None, headless=True
-):
-    """Worker for concurrent_create_text_files(): open the existing session
-    `session_name` and create `file_count` text files in it.
-    """
-    kwargs = {}
-    if content is not None:
-        kwargs["content"] = content
-    if folder is not None:
-        kwargs["folder"] = folder
-
-    last_exc = None
-    for attempt in range(_LAUNCH_ATTEMPTS):
-        try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=headless)
-                try:
-                    context = browser.new_context(ignore_https_errors=True)
-                    page = context.new_page()
-                    _stagger_login()
-                    home_url = login_to_posit_workbench(page)
-                    launch = open_existing_session(page, home_url, session_name)
-                    if working_dir:
-                        set_session_working_directory(page, path=working_dir)
-
-                    text_file_elapsed_s = [
-                        _create_text_file(page, **kwargs).elapsed_s for _ in range(file_count)
-                    ]
-
-                    if attempt:
-                        print("[rstudio-local] session %s completed on attempt %d/%d"
-                              % (session_name, attempt + 1, _LAUNCH_ATTEMPTS))
-                    return {
-                        "index": index,
-                        "ok": True,
-                        "session_name": session_name,
-                        "open_elapsed_s": launch.elapsed_s,
-                        "text_file_elapsed_s": text_file_elapsed_s,
-                        "bytes_received": launch.bytes_received,
-                        "attempts": attempt + 1,
-                    }
-                finally:
-                    browser.close()
-        except Exception as exc:
-            last_exc = exc
-            print("[rstudio-local] session %s attempt %d/%d failed: %s"
-                  % (session_name, attempt + 1, _LAUNCH_ATTEMPTS, exc))
-            if attempt + 1 < _LAUNCH_ATTEMPTS:
-                time.sleep(_retry_backoff_s(attempt))
-
-    return {
-        "index": index,
-        "ok": False,
-        "error": str(last_exc),
-        "session_name": session_name,
-        "attempts": _LAUNCH_ATTEMPTS,
-    }
+    return _run_in_parallel(session_names, _worker, max_workers_for(len(session_names), max_workers))
 
 
 def concurrent_create_text_files(
     session_names, file_count=1, working_dir=None, content=None, folder=None, max_workers=None, headless=True,
 ):
-    """Create `file_count` text files in each existing session in
-    `session_names`, in parallel.
+    """One user per existing session in `session_names`, in parallel: open
+    it and create `file_count` text files, timed apart from the open. The
+    sessions must already have a project (e.g. from
+    create_multiple_sessions_with_projects()); working_dir, if given, is
+    re-set after opening.
 
-    Times file writes separately from session launch. Sessions must already
-    have a project (e.g. from create_multiple_sessions_with_projects()).
-    working_dir, if given, is re-set after opening. Returns (results,
-    run_elapsed_s).
+    Returns (results, run_elapsed_s); results carry "open_elapsed_s",
+    "text_file_elapsed_s" (one per file) and "bytes_received".
     """
-    env_max_workers = env("RSTUDIO_CONCURRENT_MAX_WORKERS")
-    workers = max(1, max_workers or (int(env_max_workers) if env_max_workers else None) or len(session_names))
+    def _worker(index, session_name):
+        with _isolated_session_list(headless) as (worker_page, home_url):
+            launch = open_existing_session(worker_page, home_url, session_name)
+            if working_dir:
+                set_session_working_directory(worker_page, path=working_dir)
+            return {
+                "open_elapsed_s": launch.elapsed_s,
+                "text_file_elapsed_s": [
+                    create_text_file(worker_page, content=content, folder=folder).elapsed_s
+                    for _ in range(file_count)
+                ],
+                "bytes_received": launch.bytes_received,
+            }
 
-    run_started = time.time()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = [
-            executor.submit(
-                _create_text_files_isolated,
-                i + 1, session_names[i], file_count, working_dir, content, folder, headless,
-            )
-            for i in range(len(session_names))
-        ]
-        results = [f.result() for f in futures]
-    run_elapsed = time.time() - run_started
-
-    results.sort(key=lambda r: r["index"])
-    return results, run_elapsed
-
-
-def _launch_and_run_script_isolated(
-    index, session_name, source_command, timeout_ms=300000, working_dir=None,
-    think_time_s=0.0, run_count=1, headless=True, script_runs=None,
-):
-    """Worker for concurrent_launch_and_run_script(): launch `session_name`,
-    set its working directory and run source_command `run_count` times.
-    """
-    last_exc = None
-    for attempt in range(_LAUNCH_ATTEMPTS):
-        try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=headless)
-                try:
-                    context = browser.new_context(ignore_https_errors=True)
-                    page = context.new_page()
-                    _stagger_login()
-                    home_url = login_to_posit_workbench(page)
-                    launch = launch_session(page, home_url, session_name=session_name)
-                    set_session_working_directory(page, path=working_dir)
-
-                    run_elapsed_s = []
-                    for i in range(run_count):
-                        run_elapsed_s.append(
-                            run_timed_console_command(
-                                page, session_name, source_command, timeout_ms, script_runs
-                            )
-                        )
-                        if think_time_s and i + 1 < run_count:
-                            time.sleep(think_time_s)
-
-                    if attempt:
-                        print("[rstudio-local] user %d (%s) completed on attempt %d/%d"
-                              % (index, session_name, attempt + 1, _LAUNCH_ATTEMPTS))
-                    return {
-                        "index": index,
-                        "ok": True,
-                        "session_name": session_name,
-                        "launch_elapsed_s": launch.elapsed_s,
-                        "run_elapsed_s": run_elapsed_s,
-                        "bytes_received": launch.bytes_received,
-                        "attempts": attempt + 1,
-                    }
-                finally:
-                    browser.close()
-        except Exception as exc:
-            last_exc = exc
-            print("[rstudio-local] user %d (%s) attempt %d/%d failed: %s"
-                  % (index, session_name, attempt + 1, _LAUNCH_ATTEMPTS, exc))
-            if attempt + 1 < _LAUNCH_ATTEMPTS:
-                time.sleep(_retry_backoff_s(attempt))
-
-    return {
-        "index": index,
-        "ok": False,
-        "error": str(last_exc),
-        "session_name": session_name,
-        "attempts": _LAUNCH_ATTEMPTS,
-    }
+    return _run_in_parallel(session_names, _worker, max_workers_for(len(session_names), max_workers))
 
 
 def concurrent_launch_and_run_script(
     page, count=None, source_command=None, timeout_ms=None, working_dir=None,
     think_time_s=0.0, run_count=1, max_workers=None, headless=True, script_runs=None,
 ):
-    """launch_and_run_script() for `count` new Run_R_session_<N> sessions in
-    parallel.
+    """launch_and_run_script() for `count` new Run_R_session_<N> sessions
+    (default RSTUDIO_RUN_SCRIPT_CONCURRENT_USERS) in parallel. `page` must be
+    logged in; it only reserves the names. max_workers defaults to
+    RSTUDIO_RUN_SCRIPT_CONCURRENT_MAX_WORKERS. Every run, retries included,
+    is recorded in `script_runs`.
 
-    `page` must be logged in; it's only used to reserve names. count defaults
-    to RSTUDIO_RUN_SCRIPT_CONCURRENT_USERS and max_workers to
-    RSTUDIO_RUN_SCRIPT_CONCURRENT_MAX_WORKERS. Every run (retries included)
-    is recorded in `script_runs` (see common/script_timings.py). Returns
-    (results, run_elapsed_s).
+    Returns (results, run_elapsed_s); results carry "launch_elapsed_s",
+    "run_elapsed_s" (one per run) and "bytes_received".
     """
-    if count is None:
-        count = int(env("RSTUDIO_RUN_SCRIPT_CONCURRENT_USERS", "3"))
-    source_command = source_command or env("RSTUDIO_RUN_SCRIPT_SOURCE_COMMAND", "source('sample_10mb.R')")
-    timeout_ms = timeout_ms or int(env("RSTUDIO_RUN_SCRIPT_TIMEOUT_MS", "300000"))
-    env_max_workers = env("RSTUDIO_RUN_SCRIPT_CONCURRENT_MAX_WORKERS")
-    workers = max(1, max_workers or (int(env_max_workers) if env_max_workers else None) or count)
+    count = count or int(env("RSTUDIO_RUN_SCRIPT_CONCURRENT_USERS", "3"))
+    source_command = source_command or default_run_script_command()
+    timeout_ms = timeout_ms or default_run_script_timeout_ms()
 
-    session_names = next_run_r_session_names(page, count)
-
-    run_started = time.time()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = [
-            executor.submit(
-                _launch_and_run_script_isolated,
-                i + 1, session_names[i], source_command, timeout_ms, working_dir,
-                think_time_s, run_count, headless, script_runs,
+    def _worker(index, session_name):
+        with _isolated_session_list(headless) as (worker_page, home_url):
+            launch = launch_session(worker_page, home_url, session_name=session_name)
+            set_session_working_directory(worker_page, path=working_dir)
+            run_elapsed_s = run_timed_console_command_repeatedly(
+                worker_page, session_name, source_command, timeout_ms, run_count, think_time_s, script_runs
             )
-            for i in range(count)
-        ]
-        results = [f.result() for f in futures]
-    run_elapsed = time.time() - run_started
+            return {
+                "launch_elapsed_s": launch.elapsed_s,
+                "run_elapsed_s": run_elapsed_s,
+                "bytes_received": launch.bytes_received,
+            }
 
-    results.sort(key=lambda r: r["index"])
-    return results, run_elapsed
+    return _run_in_parallel(
+        next_run_r_session_names(page, count), _worker,
+        max_workers_for(count, max_workers, "RSTUDIO_RUN_SCRIPT_CONCURRENT_MAX_WORKERS"),
+    )

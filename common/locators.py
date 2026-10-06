@@ -1,3 +1,7 @@
+"""Selectors and visible texts for the Posit Workbench / RStudio Pro UI,
+grouped by the screen they belong to. Update them here when the UI changes.
+"""
+
 # --- Sign-in page (login()) -------------------------------------------------
 USERNAME_LABEL = "Username"
 PASSWORD_LABEL = "Password"
@@ -8,6 +12,8 @@ NEW_SESSION_TEXT = "New Session"
 SESSION_ROW_SELECTOR = "table tr"
 SESSION_STATUS_CELL_SELECTOR = "[data-testid^='cell-status-']"
 SESSION_STATUS_CELL_BY_ID = "[data-testid='%s']"
+# Confirmation dialogs (quit, remove, save, Workbench job)
+DIALOG_SELECTOR = "[role='dialog'], [role='alertdialog']"
 
 # --- New Session dialog (launch_new_session()) ------------------------------
 SESSION_NAME_FIELD_ROLE = "textbox"
@@ -67,7 +73,7 @@ TEXT_FILE_MENU_ITEM_TEXT = "Text File"
 SAVE_FILE_NAME_INPUT_SELECTOR = "#file_dialog_name_prompt"
 SAVE_FILE_SAVE_BUTTON = "Save"
 
-# --- Workbench Jobs pane / Start Workbench Job dialog (run_workbench_job()) --
+# --- Workbench Jobs pane / Start Workbench Job dialog (start_workbench_job()) -
 # The Start Workbench Job button's accessible name is "Run a job on a
 # cluster", so it is found by id. The dialog is titled "Run Script as
 # Workbench Job"; its R Script box is read-only (Browse... only) and is
@@ -76,9 +82,11 @@ WORKBENCH_JOBS_TAB_SELECTOR = "#rstudio_workbench_tab_workbench_jobs"
 WORKBENCH_JOBS_PANEL_SELECTOR = "#rstudio_workbench_panel_workbench_jobs"
 START_WORKBENCH_JOB_BUTTON_SELECTOR = "#rstudio_tb_startworkbenchjob"
 WORKBENCH_JOB_DIALOG_TITLE = "Run Script as Workbench Job"
+WORKBENCH_JOB_OPTIONS_TAB_TEXT = "Workbench Job Options"
 WORKBENCH_JOB_ENVIRONMENT_TAB_SELECTOR = "#rstudio_job_launcher_pro_environment_tab"
 WORKBENCH_JOB_SCRIPT_INPUT_SELECTOR = "#rstudio_tbb_text_pro_job_script"
 WORKBENCH_JOB_START_BUTTON_SELECTOR = "#rstudio_dlg_ok"
+WORKBENCH_JOB_CANCEL_BUTTON_SELECTOR = "#rstudio_dlg_cancel"
 # Each job entry has a "Stop Job" button; it asks for confirmation in a
 # "Stop Workbench Job" box whose own button is also named "Stop Job".
 WORKBENCH_JOB_STOP_BUTTON = "Stop Job"

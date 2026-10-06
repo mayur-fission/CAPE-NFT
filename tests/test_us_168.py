@@ -1,83 +1,33 @@
-
-import posixpath
-import time
-
+"""US-168: RSTUDIO_SESSION_COUNT new RStudio Pro sessions, each in its own tab,
+source the high-throughput R script concurrently and every run is timed.
+Each run must finish within HIGH_THROUGHPUT_JOB_TEST_DURATION_SECONDS and
+create OUTPUT_FILE_NAME in OUTPUT_DIR/<session name> (deleted afterwards).
+Every session created is force-quit afterwards.
+"""
 import pytest
 
 from common.config import env
-from common.rstudio_session_helper import row_ids
-from common.rstudio_workbenchjob import (
-    DEFAULT_WORKBENCH_JOB_SCRIPT,
-    launch_sessions_and_run_script,
-)
-from common.script_timings import script_timings_csv_path, write_script_timings_csv
-from common.session_actions import login_to_posit_workbench
-from common.session_cleanup import cleanup_and_verify_sessions
+from common.rstudio_workbenchjob import DEFAULT_WORKBENCH_JOB_SCRIPT
+from common.script_run_scenarios import run_script_in_new_sessions_scenario
 
 pytestmark = pytest.mark.rstudio_local
 
 HTP_SCRIPT_PATH = env("HIGH_THROUGHPUT_JOB_SCRIPT", DEFAULT_WORKBENCH_JOB_SCRIPT)
-JOB_NAME = posixpath.basename(HTP_SCRIPT_PATH)
 SESSION_COUNT = int(env("RSTUDIO_SESSION_COUNT", required=True))
-TEST_DURATION_SECONDS = float(env("RSTUDIO_WORKBENCH_JOB_TEST_DURATION_SECONDS", "300"))
-# The script writes OUTPUT_FILE_NAME relative to its working directory, so
-# setwd() to OUTPUT_DIR (or OUTPUT_DIR/<session name> with several sessions)
-# before sourcing it.
-OUTPUT_DIR = env("HIGH_THROUGHPUT_JOB_OUTPUT_DIR", "/fsx/data/batch_mayur")
-OUTPUT_FILE_NAME = "generated_data.csv"
-SCRIPT_TIMEOUT_MS = int(env("HIGH_THROUGHPUT_JOB_TIMEOUT_MS", "1800000"))
+TEST_DURATION_SECONDS = float(env("HIGH_THROUGHPUT_JOB_TEST_DURATION_SECONDS", "180"))
+OUTPUT_DIR = env("HIGH_THROUGHPUT_JOB_OUTPUT_DIR", "/home/posit")
+OUTPUT_FILE_NAME = "generated_data_10kb.csv"
 
 
-def _run_script_in_tabs_and_time(context, session_count, label, per_session_dir=False):
-    """Launch `session_count` sessions, each in its own tab, setwd to
-    OUTPUT_DIR (OUTPUT_DIR/<session name> with per_session_dir), source
-    HTP_SCRIPT_PATH in every console at once, time each run and check that
-    it created OUTPUT_FILE_NAME there, then delete it (/fsx/data is close to
-    full; each file is ~100 MB) along with any per-session folder. Writes the
-    per-session timings to evidence/rstudio_script_timings_<label>.csv and
-    quits every session created.
+def test_us168_concurrent_sessions_high_throughput_script_time(context):
+    """Writes evidence/rstudio_script_timings_high_throughput_multiple_sessions.csv.
+
+    Flow: login -> launch new sessions, one per tab -> setwd to
+    OUTPUT_DIR/<session name> -> run script in all consoles at once -> check
+    and delete output files -> quit sessions
     """
-    home_page = context.new_page()
-    home_url = login_to_posit_workbench(home_page)
-    before_ids = row_ids(home_page)
-    runs = []
-
-    started = time.time()
-    error = None
-    try:
-        runs = launch_sessions_and_run_script(
-            context, home_url, session_count, HTP_SCRIPT_PATH,
-            working_dir=OUTPUT_DIR, timeout_ms=SCRIPT_TIMEOUT_MS,
-            output_path=OUTPUT_FILE_NAME, per_session_dir=per_session_dir, delete_output=True,
-        )
-        failures = ["%s: %s" % (r["session_name"], r["status"]) for r in runs if r["status"] != "ok"]
-        print(
-            "\n[rstudio-local] %s: %d of %d session(s) ran %s successfully, %.2fs in total"
-            % (label, session_count - len(failures), session_count, HTP_SCRIPT_PATH, time.time() - started)
-        )
-        assert not failures, "script runs that did not finish: %s" % failures
-    except Exception as exc:
-        error = exc
-        raise
-    finally:
-        write_script_timings_csv(script_timings_csv_path(label), runs)
-        try:
-            cleanup_and_verify_sessions(home_page, home_url, before_ids)
-        except Exception as cleanup_exc:
-            # Don't let a cleanup failure (e.g. the browser was closed) hide
-            # the error that failed the test.
-            if error is None:
-                raise
-            print("\n[rstudio-local] %s: cleanup also failed: %s" % (label, cleanup_exc))
-
-
-
-def test_create_sessions_run_high_throughput_script_in_console_timed(context):
-    """RSTUDIO_SESSION_COUNT sessions, each in its own tab: setwd to
-    OUTPUT_DIR/<session name>, source HTP_SCRIPT_PATH in every console
-    concurrently and capture the time each run takes to finish. Each script
-    saves OUTPUT_DIR/<session name>/generated_data.csv.
-    """
-    _run_script_in_tabs_and_time(
-        context, SESSION_COUNT, "high_throughput_multiple_sessions", per_session_dir=True
+    failures = run_script_in_new_sessions_scenario(
+        context, SESSION_COUNT, "high_throughput_multiple_sessions", HTP_SCRIPT_PATH,
+        OUTPUT_DIR, OUTPUT_FILE_NAME, int(TEST_DURATION_SECONDS * 1000), per_session_dir=True,
     )
+    assert not failures, "script runs that did not finish: %s" % failures
