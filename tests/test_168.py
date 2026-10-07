@@ -19,7 +19,7 @@ OUTPUT_DIR = env("HIGH_THROUGHPUT_JOB_OUTPUT_DIR", "/home/posit")
 OUTPUT_FILE_NAME = "generated_data_10kb.csv"
 
 
-def test_us168_concurrent_sessions_high_throughput_script_time(context):
+def test_high_throughput_script_concurrent_session_timed_168(context):
     """Writes evidence/rstudio_script_timings_high_throughput_multiple_sessions.csv.
 
     Flow: login -> launch new sessions, one per tab -> setwd to

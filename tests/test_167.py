@@ -17,7 +17,7 @@ OUTPUT_DIR = env("HIGH_THROUGHPUT_JOB_OUTPUT_DIR", "/home/posit")
 OUTPUT_FILE_NAME = "generated_data_10kb.csv"
 
 
-def test_us167_single_session_high_throughput_script_time(context):
+def test_high_throughput_script_single_session_timed_167(context):
     """Writes evidence/rstudio_script_timings_high_throughput_single_session.csv.
 
     Flow: login -> launch new session -> setwd to OUTPUT_DIR -> run script
