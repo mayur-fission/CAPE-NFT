@@ -14,26 +14,49 @@
 //
 // Adding a test file: add it to TEST_FILES. Its checkbox appears after the next build.
 
+// Test file (without .py) -> checkbox description, in the order shown in Jenkins.
 // No `def`: a script-level `def` is not reliably visible inside pipeline blocks.
 TEST_FILES = [
-    'test_create_and_launch_single_session',
-    'test_create_and_launch_multiple_sessions',
-    'test_create_and_launch_multiple_sessions_user1',
-    'test_create_and_launch_multiple_sessions_user2',
-    'test_two_user_login',
-    'test_rstudio_sessions',
-    'test_rstudio_session_perf',
-    'test_rstudio_run_r_script_perf',
-    'test_rstudio_source_script_perf',
-    'test_create_sessions_run_r_close_browser',
-    'test_run_high_throughput_job',
-    'test_us_167',
-    'test_us_168',
-    'test_launch_sessions_api_user1',
-    'test_create_session_through_api_and_run_script',
-    'test_create_session_through_api_and_run_script_group',
-    'test_launch_existing_session_and_run_r_scripts',
+    'test_create_and_launch_single_session'               : 'One new session reaches its IDE',
+    'test_create_and_launch_multiple_sessions'            : 'Several sessions',
+    'test_create_and_launch_multiple_sessions_user1'      : 'Several sessions, user 1, R scripts in tabs',
+    'test_create_and_launch_multiple_sessions_user2'      : 'Several sessions, user 2, R scripts in tabs',
+    'test_two_user_login'                                 : 'Two users signed in at once',
+    'test_rstudio_sessions'                               : 'Sessions stay alive while held idle',
+    'test_rstudio_session_perf'                           : 'Launch time (single / sequential / concurrent), projects, text files',
+    'test_rstudio_run_r_script_perf'                      : 'R script time in new sessions, one or many users',
+    'test_rstudio_source_script_perf'                     : 'R script time in existing sessions',
+    'test_create_sessions_run_r_close_browser'            : 'Scripts and Workbench jobs keep running after the tab closes',
+    'test_run_high_throughput_job'                        : 'High-throughput script, timed',
+    'test_us_167'                                         : 'US 167 - high-throughput script, timed',
+    'test_us_168'                                         : 'US 168 - high-throughput script, timed',
+    'test_launch_sessions_api_user1'                      : 'Create / relaunch sessions through the API only',
+    'test_create_session_through_api_and_run_script'      : 'API-created sessions driven in the browser',
+    'test_create_session_through_api_and_run_script_group': 'API-created sessions, mixed workloads',
+    'test_launch_existing_session_and_run_r_scripts'      : 'Reuse existing API sessions',
 ]
+TEST_NAMES = new ArrayList(TEST_FILES.keySet())
+
+// Job parameters and settings, in display order. Set with properties() rather
+// than a declarative parameters {} block because properties() REPLACES the
+// job's whole parameter list on every build: a stale parameter (e.g. the old
+// ENV dropdown) or one added by hand in the Jenkins UI is removed, and the
+// order always matches this list.
+def jobParams = [
+    choice(name: 'ENVIRONMENT', choices: ['Dev', 'QA'], description: 'Target environment - picks which .env credential the tests use'),
+    booleanParam(name: 'RUN_ALL', defaultValue: false, description: 'Run every test file (ignores the checkboxes below)'),
+]
+for (name in TEST_NAMES) {
+    jobParams << booleanParam(name: name, defaultValue: false, description: TEST_FILES[name])
+}
+jobParams << string(name: 'PYTEST_K', defaultValue: '', description: 'Optional pytest -k filter applied within the selected files (e.g. "concurrent")')
+jobParams << string(name: 'EXTRA_PYTEST_ARGS', defaultValue: '', description: 'Optional extra pytest arguments (e.g. "-x" or "--maxfail=2")')
+
+properties([
+    parameters(jobParams),
+    buildDiscarder(logRotator(numToKeepStr: '30')),
+    disableConcurrentBuilds(),   // tests create real sessions on one server
+])
 
 // Run a shell command on Linux/macOS or Windows agents alike.
 def run(String cmd) {
@@ -53,33 +76,6 @@ pipeline {
 
     options {
         skipDefaultCheckout()       // checked out in the Checkout stage, after the selection check
-        buildDiscarder(logRotator(numToKeepStr: '30'))
-        disableConcurrentBuilds()   // tests create real sessions on one server
-    }
-
-    parameters {
-        choice(name: 'ENVIRONMENT', choices: ['Dev', 'QA'], description: 'Target environment - picks which .env credential the tests use')
-        booleanParam(name: 'RUN_ALL', defaultValue: false, description: 'Run every test file (ignores the checkboxes below)')
-        booleanParam(name: 'test_create_and_launch_single_session', defaultValue: false, description: 'One new session reaches its IDE')
-        booleanParam(name: 'test_create_and_launch_multiple_sessions', defaultValue: false, description: 'Several sessions')
-        booleanParam(name: 'test_create_and_launch_multiple_sessions_user1', defaultValue: false, description: 'Several sessions, user 1, R scripts in tabs')
-        booleanParam(name: 'test_create_and_launch_multiple_sessions_user2', defaultValue: false, description: 'Several sessions, user 2, R scripts in tabs')
-        booleanParam(name: 'test_two_user_login', defaultValue: false, description: 'Two users signed in at once')
-        booleanParam(name: 'test_rstudio_sessions', defaultValue: false, description: 'Sessions stay alive while held idle')
-        booleanParam(name: 'test_rstudio_session_perf', defaultValue: false, description: 'Launch time (single / sequential / concurrent), projects, text files')
-        booleanParam(name: 'test_rstudio_run_r_script_perf', defaultValue: false, description: 'R script time in new sessions, one or many users')
-        booleanParam(name: 'test_rstudio_source_script_perf', defaultValue: false, description: 'R script time in existing sessions')
-        booleanParam(name: 'test_create_sessions_run_r_close_browser', defaultValue: false, description: 'Scripts and Workbench jobs keep running after the tab closes')
-        booleanParam(name: 'test_run_high_throughput_job', defaultValue: false, description: 'High-throughput script, timed')
-        booleanParam(name: 'test_us_167', defaultValue: false, description: 'US 167 - high-throughput script, timed')
-        booleanParam(name: 'test_us_168', defaultValue: false, description: 'US 168 - high-throughput script, timed')
-        booleanParam(name: 'test_launch_sessions_api_user1', defaultValue: false, description: 'Create / relaunch sessions through the API only')
-        booleanParam(name: 'test_create_session_through_api_and_run_script', defaultValue: false, description: 'API-created sessions driven in the browser')
-        booleanParam(name: 'test_create_session_through_api_and_run_script_group', defaultValue: false, description: 'API-created sessions, mixed workloads')
-        booleanParam(name: 'test_launch_existing_session_and_run_r_scripts', defaultValue: false, description: 'Reuse existing API sessions')
-
-        string(name: 'PYTEST_K', defaultValue: '', description: 'Optional pytest -k filter applied within the selected files (e.g. "concurrent")')
-        string(name: 'EXTRA_PYTEST_ARGS', defaultValue: '', description: 'Optional extra pytest arguments (e.g. "-x" or "--maxfail=2")')
     }
 
     environment {
@@ -90,13 +86,13 @@ pipeline {
         stage('Select tests') {
             steps {
                 script {
-                    def selected = params.RUN_ALL ? TEST_FILES : TEST_FILES.findAll { params[it] }
+                    def selected = params.RUN_ALL ? TEST_NAMES : TEST_NAMES.findAll { params[it] }
                     if (!selected) {
                         error('No tests selected. Tick at least one test checkbox (or RUN_ALL) and build again.')
                     }
                     env.TEST_PATHS = selected.collect { "tests/${it}.py" }.join(' ')
                     currentBuild.description = "${params.ENVIRONMENT}: " +
-                        (selected.size() == TEST_FILES.size() ? 'all tests' : selected.join(', '))
+                        (selected.size() == TEST_NAMES.size() ? 'all tests' : selected.join(', '))
                     echo "Running ${selected.size()} test file(s) on ${params.ENVIRONMENT}:\n  " + selected.join('\n  ')
                 }
             }
