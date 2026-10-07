@@ -1,15 +1,15 @@
-# Python and tooling
+# Python
 .venv/
-vendor/
 __pycache__/
 *.pyc
 .pytest_cache/
-.ruff_cache/
 
 # Secrets
 .env
+.env.*
 
-# Test results: reports, timings, Allure output, metrics data, logs
+# Test output: Allure results/report, timing CSVs, perf JSON, Prometheus
+# config/data/logs (all under evidence/), plus pytest-playwright traces
 evidence/*
 !evidence/.gitkeep
 test-results/
@@ -18,3 +18,9 @@ test-results/
 # Files the tests generate in testdata/ (the input CSVs stay tracked)
 testdata/session_ids_U*.csv
 testdata/session_projects_U*.xlsx
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
