@@ -63,6 +63,9 @@ jobParams << string(name: 'UI_BROWSERS', defaultValue: '2',
                  '(5 today), so 2 browsers = 10 sessions')
 jobParams << string(name: 'UI_BROWSER_STAGGER_S', defaultValue: '30',
     description: 'Multi-browser test: seconds between starting one browser and the next, so logins do not clash')
+jobParams << string(name: 'PARALLEL_LOGIN_GAP_S', defaultValue: '30',
+    description: 'With RUN_IN_PARALLEL: minimum seconds between any two logins across all the parallel tests ' +
+                 '(Workbench fails sign-ins that happen at the same time)')
 jobParams << string(name: 'GROUP_TEST_DURATION_S', defaultValue: '180',
     description: 'Group tests (API, UI and multi-browser): how long the workloads run, in seconds')
 jobParams << string(name: 'PYTEST_K', defaultValue: '', description: 'Optional pytest -k filter applied within the selected files (e.g. "concurrent")')
@@ -111,7 +114,7 @@ pipeline {
                     if (!selected) {
                         error('No tests selected. Tick at least one test checkbox (or RUN_ALL) and build again.')
                     }
-                    ['UI_BROWSERS', 'UI_BROWSER_STAGGER_S', 'GROUP_TEST_DURATION_S'].each { name ->
+                    ['UI_BROWSERS', 'UI_BROWSER_STAGGER_S', 'PARALLEL_LOGIN_GAP_S', 'GROUP_TEST_DURATION_S'].each { name ->
                         def value = params[name]?.trim()
                         if (!(value ==~ /\d+/) || (name == 'UI_BROWSERS' && value.toInteger() < 1)) {
                             error("${name} must be a whole number${name == 'UI_BROWSERS' ? ' of at least 1' : ''}, got '${params[name]}'")
@@ -188,10 +191,11 @@ pipeline {
                             // The workspace is reused between builds: drop the last build's
                             // results so the JUnit/Allure reports only show this one.
                             if (isUnix()) {
-                                sh 'rm -rf evidence/junit*.xml evidence/allure-results'
+                                sh 'rm -rf evidence/junit*.xml evidence/allure-results evidence/.login_slot.lock'
                             } else {
                                 bat '''
                                     if exist evidence\\junit*.xml del /F /Q evidence\\junit*.xml
+                                    if exist evidence\\.login_slot.lock del /F /Q evidence\\.login_slot.lock
                                     if exist evidence\\allure-results rmdir /S /Q evidence\\allure-results
                                     exit /b 0
                                 '''
@@ -211,6 +215,10 @@ pipeline {
                                 // One pytest per file, all at once; each writes its own JUnit
                                 // file and Playwright output folder (pytest-playwright empties
                                 // it at startup), and Allure results (uniquely named) share one folder.
+                                // Logins from all the parallel tests are spaced out
+                                // (common/session_retry.py wait_for_login_slot()).
+                                env.LOGIN_MIN_INTERVAL_S = params.PARALLEL_LOGIN_GAP_S.trim()
+                                echo "Logins across the parallel tests start at least ${env.LOGIN_MIN_INTERVAL_S}s apart"
                                 def branches = [:]
                                 for (name in selected) {
                                     def testName = name   // the closure must capture this iteration's value

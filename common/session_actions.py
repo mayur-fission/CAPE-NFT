@@ -29,6 +29,7 @@ from common.rstudio_workbench import (  # noqa: F401 - re-exported
     recreate_session_folder,
 )
 from common.rstudio_workbench import login as _login
+from common.session_retry import wait_for_login_slot
 from common.rstudio_workbench import set_working_directory as _set_working_directory
 from common.session_retry import retry
 
@@ -37,7 +38,9 @@ WORKING_DIR = env("RSTUDIO_WORKING_DIR")
 
 def login_to_posit_workbench(page, user=1):
     """Log into RSTUDIO_BASE_URL as `user` and return the session list URL.
-    Screenshots the page after signing in as login_<username>.png.
+    Waits first so logins from every test process and thread start at least
+    LOGIN_MIN_INTERVAL_S apart (see wait_for_login_slot()). Screenshots the
+    page after signing in as login_<username>.png.
 
     user=1 uses RSTUDIO_USER1/RSTUDIO_PASSWORD; user=N uses
     RSTUDIO_USER<N>/RSTUDIO_PASSWORD<N>.
@@ -46,6 +49,7 @@ def login_to_posit_workbench(page, user=1):
     password_suffix = "" if user == 1 else str(user)
     username = env("RSTUDIO_USER%s" % user, required=True)
     password = env("RSTUDIO_PASSWORD%s" % password_suffix, required=True)
+    wait_for_login_slot()
     home_url = _login(page, base_url, username=username, password=password)
     save_screenshot(page, "login_%s.png" % username)
     return home_url
