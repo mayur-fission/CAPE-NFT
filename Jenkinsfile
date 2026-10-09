@@ -204,17 +204,25 @@ pipeline {
 
                             // pytest exit code per run: 0 passed, 1 some tests failed, 2+ run broke.
                             def statuses = [:]
-                            if (params.RUN_IN_PARALLEL && selected.size() > 1) {
+                            def inParallel = params.RUN_IN_PARALLEL?.toString() == 'true' && selected.size() > 1
+                            echo "RUN_IN_PARALLEL=${params.RUN_IN_PARALLEL}, ${selected.size()} test file(s) selected -> " +
+                                 (inParallel ? 'starting them all at once' : 'running them one after another')
+                            if (inParallel) {
                                 // One pytest per file, all at once; each writes its own JUnit
-                                // file, and Allure results (uniquely named) share one folder.
+                                // file and Playwright output folder (pytest-playwright empties
+                                // it at startup), and Allure results (uniquely named) share one folder.
                                 def branches = [:]
                                 for (name in selected) {
                                     def testName = name   // the closure must capture this iteration's value
                                     branches[testName] = {
+                                        echo "${testName}: started"
                                         statuses[testName] = runStatus(
-                                            "${py} -m pytest tests/${testName}.py ${commonArgs} --junitxml=evidence/junit-${testName}.xml")
+                                            "${py} -m pytest tests/${testName}.py ${commonArgs} " +
+                                            "--junitxml=evidence/junit-${testName}.xml --output=test-results/${testName}")
+                                        echo "${testName}: finished (pytest exit code ${statuses[testName]})"
                                     }
                                 }
+                                branches.failFast = false
                                 parallel branches
                             } else {
                                 statuses['pytest'] = runStatus("${py} -m pytest ${env.TEST_PATHS} ${commonArgs} --junitxml=evidence/junit.xml")
