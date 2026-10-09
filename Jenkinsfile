@@ -40,9 +40,13 @@ TEST_FILES = [
         'UI-created sessions, mixed workloads, in UI_BROWSERS browsers launching in parallel (B1_, B2_, ... name prefixes)',
     'test_launch_existing_session_and_run_r_scripts'      : 'Reuse existing API sessions',
     'test_active_session_count'                           :
-        'Count Active + Executing sessions every 10 s for ACTIVE_SESSIONS_MONITOR_S (tick with RUN_IN_PARALLEL to watch a load test)',
+        'Count Active + Executing sessions every 10 s. With RUN_IN_PARALLEL it runs until all the other ticked tests finish; ' +
+        'otherwise for ACTIVE_SESSIONS_MONITOR_S',
 ]
 TEST_NAMES = new ArrayList(TEST_FILES.keySet())
+// Written when every other parallel test has finished; test_active_session_count
+// stops counting once it appears.
+STOP_FILE = 'evidence/.active_sessions_stop'
 
 // Job parameters and settings, in display order. Set with properties() rather
 // than a declarative parameters {} block because properties() REPLACES the
@@ -71,7 +75,8 @@ jobParams << string(name: 'PARALLEL_LOGIN_GAP_S', defaultValue: '30',
 jobParams << string(name: 'GROUP_TEST_DURATION_S', defaultValue: '180',
     description: 'Group tests (API, UI and multi-browser): how long the workloads run, in seconds')
 jobParams << string(name: 'ACTIVE_SESSIONS_MONITOR_S', defaultValue: '300',
-    description: 'test_active_session_count: how long to keep counting Active + Executing sessions (every 10 s), in seconds')
+    description: 'test_active_session_count without RUN_IN_PARALLEL (or ticked on its own): how long to keep counting, in seconds. ' +
+                 'With RUN_IN_PARALLEL it counts until the other tests finish instead')
 jobParams << string(name: 'ACTIVE_SESSIONS_USERS', defaultValue: '1',
     description: 'test_active_session_count: users whose sessions are counted and added up, e.g. "1,2"')
 jobParams << string(name: 'PYTEST_K', defaultValue: '', description: 'Optional pytest -k filter applied within the selected files (e.g. "concurrent")')
@@ -207,11 +212,12 @@ pipeline {
                             // The workspace is reused between builds: drop the last build's
                             // results so the JUnit/Allure reports only show this one.
                             if (isUnix()) {
-                                sh 'rm -rf evidence/junit*.xml evidence/allure-results evidence/.login_slot.lock'
+                                sh "rm -rf evidence/junit*.xml evidence/allure-results evidence/.login_slot.lock ${STOP_FILE}"
                             } else {
                                 bat '''
                                     if exist evidence\\junit*.xml del /F /Q evidence\\junit*.xml
                                     if exist evidence\\.login_slot.lock del /F /Q evidence\\.login_slot.lock
+                                    if exist evidence\\.active_sessions_stop del /F /Q evidence\\.active_sessions_stop
                                     if exist evidence\\allure-results rmdir /S /Q evidence\\allure-results
                                     exit /b 0
                                 '''
@@ -235,15 +241,34 @@ pipeline {
                                 // (common/session_retry.py wait_for_login_slot()).
                                 env.LOGIN_MIN_INTERVAL_S = (params.PARALLEL_LOGIN_GAP_S ?: '30').trim()
                                 echo "Logins across the parallel tests start at least ${env.LOGIN_MIN_INTERVAL_S}s apart"
+                                // test_active_session_count keeps counting until every other
+                                // test has finished: the last one to finish writes the stop file
+                                // it watches (ACTIVE_SESSIONS_STOP_FILE).
+                                def monitor = 'test_active_session_count'
+                                def watchOthers = selected.contains(monitor)
+                                def othersLeft = [count: selected.findAll { it != monitor }.size()]
+                                if (watchOthers) {
+                                    echo "${monitor} counts sessions until the other ${othersLeft.count} test file(s) finish"
+                                }
                                 def branches = [:]
                                 for (name in selected) {
                                     def testName = name   // the closure must capture this iteration's value
                                     branches[testName] = {
                                         echo "${testName}: started"
-                                        statuses[testName] = runStatus(
-                                            "${py} -m pytest tests/${testName}.py ${commonArgs} " +
-                                            "--junitxml=evidence/junit-${testName}.xml --output=test-results/${testName}")
+                                        def branchEnv = (watchOthers && testName == monitor) ? ["ACTIVE_SESSIONS_STOP_FILE=${STOP_FILE}"] : []
+                                        withEnv(branchEnv) {
+                                            statuses[testName] = runStatus(
+                                                "${py} -m pytest tests/${testName}.py ${commonArgs} " +
+                                                "--junitxml=evidence/junit-${testName}.xml --output=test-results/${testName}")
+                                        }
                                         echo "${testName}: finished (pytest exit code ${statuses[testName]})"
+                                        if (watchOthers && testName != monitor) {
+                                            othersLeft.count -= 1
+                                            if (othersLeft.count == 0) {
+                                                writeFile file: STOP_FILE, text: 'all other tests finished\n'
+                                                echo "All other tests finished - telling ${monitor} to stop"
+                                            }
+                                        }
                                     }
                                 }
                                 branches.failFast = false

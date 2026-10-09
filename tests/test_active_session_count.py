@@ -1,9 +1,14 @@
 """Monitor how many Workbench sessions are running: every
-ACTIVE_SESSIONS_POLL_INTERVAL_S (10 s) for ACTIVE_SESSIONS_MONITOR_S, count
-the rows on each user's session list with status Active (X) and Executing
-(Y), and record them with their total X + Y (the running sessions). Run it
-alongside the load tests (Jenkins RUN_IN_PARALLEL) to see the session count
-over the run. Creates and quits no sessions.
+ACTIVE_SESSIONS_POLL_INTERVAL_S (10 s), count the rows on each user's
+session list with status Active (X) and Executing (Y), and record them with
+their total X + Y (the running sessions). Creates and quits no sessions.
+
+How long it runs:
+- With ACTIVE_SESSIONS_STOP_FILE set (Jenkins sets it with RUN_IN_PARALLEL):
+  until that file appears - Jenkins writes it once every other test of the
+  build has finished - plus one last poll. ACTIVE_SESSIONS_MAX_S (12 h) is a
+  safety limit.
+- Otherwise: for ACTIVE_SESSIONS_MONITOR_S.
 
 The Workbench home page only lists the signed-in user's own sessions (the
 admin dashboard is not enabled), so the total is over the users in
@@ -16,7 +21,7 @@ from datetime import datetime
 
 import pytest
 
-from common.config import EVIDENCE_DIR, env, env_list
+from common.config import EVIDENCE_DIR, REPO_ROOT, env, env_list
 from common.evidence import save_screenshot
 from common.rstudio_session_helper import goto_session_list, session_status_counts
 from common.session_actions import login_to_posit_workbench
@@ -27,6 +32,11 @@ pytestmark = pytest.mark.rstudio_local
 USERS = [int(u) for u in env_list("ACTIVE_SESSIONS_USERS", ["1"])]
 POLL_INTERVAL_S = float(env("ACTIVE_SESSIONS_POLL_INTERVAL_S", "10"))
 MONITOR_S = float(env("ACTIVE_SESSIONS_MONITOR_S", "300"))
+# Relative paths are under the repo root (where Jenkins writes it).
+STOP_FILE = env("ACTIVE_SESSIONS_STOP_FILE") or None
+if STOP_FILE and not os.path.isabs(STOP_FILE):
+    STOP_FILE = os.path.join(REPO_ROOT, STOP_FILE)
+MAX_S = float(env("ACTIVE_SESSIONS_MAX_S", str(12 * 3600)))
 CSV_PATH = os.path.join(EVIDENCE_DIR, "active_sessions.csv")
 CSV_HEADER = ["Time", "Elapsed (s)", "Poll", "User", "Active", "Executing", "Total Sessions (Active + Executing)",
               "Listed Sessions", "Statuses", "Error"]
@@ -73,14 +83,18 @@ def test_active_session_count_every_10_seconds(browser, browser_context_args, ca
             contexts.append(context)
             page = context.new_page()
             pages[user] = (page, login_to_posit_workbench(page, user=user))
-        _live(capsys, "counting Active + Executing sessions of users %s every %.0fs for %.0fs, into %s"
-              % (", ".join(str(u) for u in USERS), POLL_INTERVAL_S, MONITOR_S, CSV_PATH))
+        _live(capsys, "counting Active + Executing sessions of users %s every %.0fs %s, into %s"
+              % (", ".join(str(u) for u in USERS), POLL_INTERVAL_S,
+                 "until the other tests finish (%s appears)" % STOP_FILE if STOP_FILE else "for %.0fs" % MONITOR_S,
+                 CSV_PATH))
 
         started = time.time()
         poll = 0
         while True:
             poll += 1
             poll_started = time.time()
+            # Checked before the poll, so the poll after the other tests end is the last one.
+            others_done = bool(STOP_FILE) and os.path.exists(STOP_FILE)
             stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             elapsed = "%.0f" % (poll_started - started)
             sum_active = sum_executing = sum_listed = failed = 0
@@ -115,7 +129,14 @@ def test_active_session_count_every_10_seconds(browser, browser_context_args, ca
             # Polls start POLL_INTERVAL_S apart (a poll that takes longer is
             # followed by the next one straight away).
             next_poll = poll_started + POLL_INTERVAL_S
-            if next_poll - started > MONITOR_S:
+            if others_done:
+                _live(capsys, "the other tests have finished - stopping after %d poll(s)" % poll)
+                break
+            if not STOP_FILE and next_poll - started > MONITOR_S:
+                break
+            if STOP_FILE and next_poll - started > MAX_S:
+                _live(capsys, "stopping at the ACTIVE_SESSIONS_MAX_S limit (%.0fs) - the other tests did not finish"
+                      % MAX_S)
                 break
             time.sleep(max(0.0, next_poll - time.time()))
     finally:
