@@ -39,6 +39,8 @@ TEST_FILES = [
     'test_create_session_through_ui_and_run_script_group_multi_browser':
         'UI-created sessions, mixed workloads, in UI_BROWSERS browsers launching in parallel (B1_, B2_, ... name prefixes)',
     'test_launch_existing_session_and_run_r_scripts'      : 'Reuse existing API sessions',
+    'test_active_session_count'                           :
+        'Count Active sessions every 10 s for ACTIVE_SESSIONS_MONITOR_S (tick with RUN_IN_PARALLEL to watch a load test)',
 ]
 TEST_NAMES = new ArrayList(TEST_FILES.keySet())
 
@@ -68,6 +70,10 @@ jobParams << string(name: 'PARALLEL_LOGIN_GAP_S', defaultValue: '30',
                  '(Workbench fails sign-ins that happen at the same time)')
 jobParams << string(name: 'GROUP_TEST_DURATION_S', defaultValue: '180',
     description: 'Group tests (API, UI and multi-browser): how long the workloads run, in seconds')
+jobParams << string(name: 'ACTIVE_SESSIONS_MONITOR_S', defaultValue: '300',
+    description: 'test_active_session_count: how long to keep counting Active sessions (every 10 s), in seconds')
+jobParams << string(name: 'ACTIVE_SESSIONS_USERS', defaultValue: '1',
+    description: 'test_active_session_count: users whose Active sessions are counted and added up, e.g. "1,2"')
 jobParams << string(name: 'PYTEST_K', defaultValue: '', description: 'Optional pytest -k filter applied within the selected files (e.g. "concurrent")')
 jobParams << string(name: 'EXTRA_PYTEST_ARGS', defaultValue: '', description: 'Optional extra pytest arguments (e.g. "-x" or "--maxfail=2")')
 
@@ -111,10 +117,18 @@ pipeline {
             steps {
                 script {
                     def selected = params.RUN_ALL ? TEST_NAMES : TEST_NAMES.findAll { params[it] }
+                    // A field added since the last build has no value yet: skip it, its default applies.
+                    if (params.ACTIVE_SESSIONS_USERS != null && !(params.ACTIVE_SESSIONS_USERS.trim() ==~ /\d+(\s*,\s*\d+)*/)) {
+                        error("ACTIVE_SESSIONS_USERS must be user numbers separated by commas (e.g. 1,2), got '${params.ACTIVE_SESSIONS_USERS}'")
+                    }
                     if (!selected) {
                         error('No tests selected. Tick at least one test checkbox (or RUN_ALL) and build again.')
                     }
-                    ['UI_BROWSERS', 'UI_BROWSER_STAGGER_S', 'PARALLEL_LOGIN_GAP_S', 'GROUP_TEST_DURATION_S'].each { name ->
+                    ['UI_BROWSERS', 'UI_BROWSER_STAGGER_S', 'PARALLEL_LOGIN_GAP_S', 'GROUP_TEST_DURATION_S',
+                     'ACTIVE_SESSIONS_MONITOR_S'].each { name ->
+                        if (params[name] == null) {
+                            return
+                        }
                         def value = params[name]?.trim()
                         if (!(value ==~ /\d+/) || (name == 'UI_BROWSERS' && value.toInteger() < 1)) {
                             error("${name} must be a whole number${name == 'UI_BROWSERS' ? ' of at least 1' : ''}, got '${params[name]}'")
@@ -180,6 +194,8 @@ pipeline {
                     "GROUP_SESSIONS_UI_BROWSERS=${params.UI_BROWSERS.trim()}",
                     "GROUP_SESSIONS_UI_BROWSER_STAGGER_S=${params.UI_BROWSER_STAGGER_S.trim()}",
                     "GROUP_SESSIONS_TEST_DURATION_S=${params.GROUP_TEST_DURATION_S.trim()}",
+                    "ACTIVE_SESSIONS_MONITOR_S=${(params.ACTIVE_SESSIONS_MONITOR_S ?: '300').trim()}",
+                    "ACTIVE_SESSIONS_USERS=${(params.ACTIVE_SESSIONS_USERS ?: '1').trim()}",
                 ]) {
                     withCredentials([file(credentialsId: "cape-nft-env-${params.ENVIRONMENT.toLowerCase()}", variable: 'ENV_FILE')]) {
                         script {
@@ -217,7 +233,7 @@ pipeline {
                                 // it at startup), and Allure results (uniquely named) share one folder.
                                 // Logins from all the parallel tests are spaced out
                                 // (common/session_retry.py wait_for_login_slot()).
-                                env.LOGIN_MIN_INTERVAL_S = params.PARALLEL_LOGIN_GAP_S.trim()
+                                env.LOGIN_MIN_INTERVAL_S = (params.PARALLEL_LOGIN_GAP_S ?: '30').trim()
                                 echo "Logins across the parallel tests start at least ${env.LOGIN_MIN_INTERVAL_S}s apart"
                                 def branches = [:]
                                 for (name in selected) {
