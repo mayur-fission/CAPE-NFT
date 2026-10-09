@@ -1,6 +1,7 @@
-"""Monitor how many Workbench sessions are Active: every
+"""Monitor how many Workbench sessions are running: every
 ACTIVE_SESSIONS_POLL_INTERVAL_S (10 s) for ACTIVE_SESSIONS_MONITOR_S, count
-the Active rows on each user's session list and record the counts. Run it
+the rows on each user's session list with status Active (X) and Executing
+(Y), and record them with their total X + Y (the running sessions). Run it
 alongside the load tests (Jenkins RUN_IN_PARALLEL) to see the session count
 over the run. Creates and quits no sessions.
 
@@ -27,7 +28,8 @@ USERS = [int(u) for u in env_list("ACTIVE_SESSIONS_USERS", ["1"])]
 POLL_INTERVAL_S = float(env("ACTIVE_SESSIONS_POLL_INTERVAL_S", "10"))
 MONITOR_S = float(env("ACTIVE_SESSIONS_MONITOR_S", "300"))
 CSV_PATH = os.path.join(EVIDENCE_DIR, "active_sessions.csv")
-CSV_HEADER = ["Time", "Elapsed (s)", "Poll", "User", "Active Sessions", "Listed Sessions", "Statuses", "Error"]
+CSV_HEADER = ["Time", "Elapsed (s)", "Poll", "User", "Active", "Executing", "Total Sessions (Active + Executing)",
+              "Listed Sessions", "Statuses", "Error"]
 
 
 def _write_csv(rows):
@@ -51,17 +53,18 @@ def test_active_session_count_every_10_seconds(browser, browser_context_args, ca
     """Every poll reads every user's session list.
 
     - In progress: each poll prints a line to the console, e.g.
-      "[active-sessions] poll 7 at 2026-10-09 16:20:31 (+60s): 12 active
-      session(s) of 14 listed (users 1)".
+      "[active-sessions] poll 7 at 2026-10-09 16:20:31 (+60s): Active=9,
+      Executing=3, Total sessions=12 (14 listed, users 1)".
     - When over: evidence/active_sessions.csv has one row per poll and
       user (plus a total row with several users) - time, seconds since the
-      first poll, Active and listed counts, every status seen, and the error
-      for a poll that could not read the list. It is rewritten after every
-      poll and attached to Allure at the end, with a screenshot of each poll.
+      first poll, the Active, Executing and total (Active + Executing)
+      counts, the listed count, every status seen, and the error for a poll
+      that could not read the list. It is rewritten after every poll and
+      attached to Allure at the end, with a screenshot of each poll.
 
     Flow: login as each user (own browser context) -> every POLL_INTERVAL_S
-    until MONITOR_S: reload each session list and count Active rows -> write
-    CSV -> close contexts
+    until MONITOR_S: reload each session list and count Active and Executing
+    rows -> write CSV -> close contexts
     """
     contexts, pages, rows, errors = [], {}, [], []
     try:
@@ -70,7 +73,7 @@ def test_active_session_count_every_10_seconds(browser, browser_context_args, ca
             contexts.append(context)
             page = context.new_page()
             pages[user] = (page, login_to_posit_workbench(page, user=user))
-        _live(capsys, "counting Active sessions of users %s every %.0fs for %.0fs, into %s"
+        _live(capsys, "counting Active + Executing sessions of users %s every %.0fs for %.0fs, into %s"
               % (", ".join(str(u) for u in USERS), POLL_INTERVAL_S, MONITOR_S, CSV_PATH))
 
         started = time.time()
@@ -80,7 +83,7 @@ def test_active_session_count_every_10_seconds(browser, browser_context_args, ca
             poll_started = time.time()
             stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             elapsed = "%.0f" % (poll_started - started)
-            total_active = total_listed = failed = 0
+            sum_active = sum_executing = sum_listed = failed = 0
             for user, (page, home_url) in pages.items():
                 try:
                     goto_session_list(page, home_url)
@@ -88,22 +91,25 @@ def test_active_session_count_every_10_seconds(browser, browser_context_args, ca
                 except Exception as exc:
                     failed += 1
                     errors.append("poll %d, user %d: %s" % (poll, user, exc))
-                    rows.append([stamp, elapsed, poll, "user %d" % user, "", "", "", "error: %s" % exc])
+                    rows.append([stamp, elapsed, poll, "user %d" % user, "", "", "", "", "", "error: %s" % exc])
                     _live(capsys, "poll %d at %s: could not read user %d's session list: %s" % (poll, stamp, user, exc))
                     save_screenshot(page, "active_sessions_failed_U%d_poll%d.png" % (user, poll), always=True)
                     continue
-                active, listed = statuses.get("Active", 0), sum(statuses.values())
-                total_active += active
-                total_listed += listed
-                rows.append([stamp, elapsed, poll, "user %d" % user, active, listed,
+                active, executing = statuses.get("Active", 0), statuses.get("Executing", 0)
+                listed = sum(statuses.values())
+                sum_active += active
+                sum_executing += executing
+                sum_listed += listed
+                rows.append([stamp, elapsed, poll, "user %d" % user, active, executing, active + executing, listed,
                              "; ".join("%s=%d" % kv for kv in sorted(statuses.items())), ""])
                 save_screenshot(page, "active_sessions_U%d_poll%d.png" % (user, poll))
             if len(pages) > 1:
-                rows.append([stamp, elapsed, poll, "total", total_active, total_listed, "",
-                             "%d user(s) could not be read" % failed if failed else ""])
+                rows.append([stamp, elapsed, poll, "total", sum_active, sum_executing, sum_active + sum_executing,
+                             sum_listed, "", "%d user(s) could not be read" % failed if failed else ""])
             _write_csv(rows)
-            _live(capsys, "poll %d at %s (+%ss): %d active session(s) of %d listed (users %s)%s"
-                  % (poll, stamp, elapsed, total_active, total_listed, ", ".join(str(u) for u in USERS),
+            _live(capsys, "poll %d at %s (+%ss): Active=%d, Executing=%d, Total sessions=%d (%d listed, users %s)%s"
+                  % (poll, stamp, elapsed, sum_active, sum_executing, sum_active + sum_executing, sum_listed,
+                     ", ".join(str(u) for u in USERS),
                      " - %d user(s) could not be read" % failed if failed else ""))
 
             # Polls start POLL_INTERVAL_S apart (a poll that takes longer is

@@ -40,7 +40,7 @@ TEST_FILES = [
         'UI-created sessions, mixed workloads, in UI_BROWSERS browsers launching in parallel (B1_, B2_, ... name prefixes)',
     'test_launch_existing_session_and_run_r_scripts'      : 'Reuse existing API sessions',
     'test_active_session_count'                           :
-        'Count Active sessions every 10 s for ACTIVE_SESSIONS_MONITOR_S (tick with RUN_IN_PARALLEL to watch a load test)',
+        'Count Active + Executing sessions every 10 s for ACTIVE_SESSIONS_MONITOR_S (tick with RUN_IN_PARALLEL to watch a load test)',
 ]
 TEST_NAMES = new ArrayList(TEST_FILES.keySet())
 
@@ -71,9 +71,9 @@ jobParams << string(name: 'PARALLEL_LOGIN_GAP_S', defaultValue: '30',
 jobParams << string(name: 'GROUP_TEST_DURATION_S', defaultValue: '180',
     description: 'Group tests (API, UI and multi-browser): how long the workloads run, in seconds')
 jobParams << string(name: 'ACTIVE_SESSIONS_MONITOR_S', defaultValue: '300',
-    description: 'test_active_session_count: how long to keep counting Active sessions (every 10 s), in seconds')
+    description: 'test_active_session_count: how long to keep counting Active + Executing sessions (every 10 s), in seconds')
 jobParams << string(name: 'ACTIVE_SESSIONS_USERS', defaultValue: '1',
-    description: 'test_active_session_count: users whose Active sessions are counted and added up, e.g. "1,2"')
+    description: 'test_active_session_count: users whose sessions are counted and added up, e.g. "1,2"')
 jobParams << string(name: 'PYTEST_K', defaultValue: '', description: 'Optional pytest -k filter applied within the selected files (e.g. "concurrent")')
 jobParams << string(name: 'EXTRA_PYTEST_ARGS', defaultValue: '', description: 'Optional extra pytest arguments (e.g. "-x" or "--maxfail=2")')
 

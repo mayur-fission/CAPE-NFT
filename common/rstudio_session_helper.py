@@ -24,6 +24,10 @@ RUN_R_SESSION_NAME_PREFIX = "Run_R_session_"
 # created, not other people's on a shared account.
 AUTOMATION_NAME_PREFIXES = (AUTO_PERF_NAME_PREFIX, RUN_R_SESSION_NAME_PREFIX, "AUTO_SESSION_U")
 
+# Session list statuses that count as a running session: idle (Active) or
+# running code (Executing).
+ACTIVE_STATUSES = ("Active", "Executing")
+
 # The session table re-renders shortly after "New Session" appears.
 SESSION_LIST_SETTLE_MS = 1500
 
@@ -221,8 +225,10 @@ def session_status_counts(page):
 
 
 def get_active_session_count(page):
-    """Number of rows with status Active. `page` must show the session list."""
-    return session_status_counts(page).get("Active", 0)
+    """Number of running sessions: rows with status Active or Executing
+    (ACTIVE_STATUSES). `page` must show the session list."""
+    counts = session_status_counts(page)
+    return sum(counts.get(status, 0) for status in ACTIVE_STATUSES)
 
 
 def _click_and_confirm(page, click_action, confirm_button_name, timeout_ms=5000, poll_interval_ms=200):
