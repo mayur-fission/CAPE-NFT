@@ -7,6 +7,7 @@ import posixpath
 import time
 
 from common import locators
+from common.evidence import save_output_file, save_screenshot
 from common.rstudio_console_commands import (
     get_file_size,
     r_source_command,
@@ -265,6 +266,7 @@ def launch_sessions_and_start_jobs(context, home_url, session_count, script_path
             launch = launch_new_session(tab, home_url)
             session_names.append(launch.session_name)
             job_name, submit_elapsed = start_workbench_job(tab, script_path)
+            save_screenshot(tab, "workbench_job_started_%s.png" % launch.session_name)
             print(
                 "\n[rstudio-local] session %s launched in %.2fs, job %s started in %.2fs (status: %s)"
                 % (launch.session_name, launch.elapsed_s, job_name, submit_elapsed,
@@ -314,6 +316,7 @@ def launch_sessions_and_source_script(context, home_url, session_count, script_p
             tab.locator(locators.CONSOLE_OUTPUT_SELECTOR).get_by_text(source_command).first.wait_for(
                 state="visible", timeout=10000
             )
+            save_screenshot(tab, "console_input_%s.png" % launch.session_name)
             print(
                 "\n[rstudio-local] session %s launched in %.2fs, %s submitted in the console"
                 % (launch.session_name, launch.elapsed_s, source_command)
@@ -324,7 +327,8 @@ def launch_sessions_and_source_script(context, home_url, session_count, script_p
 
 def check_output_file(page, record, output_path, delete=False, remove_dir=None):
     """After a finished run: set record["status"] to an error unless
-    `output_path` exists. With `delete`, then delete it, and remove the
+    `output_path` exists, else copy it to evidence/ and the Allure report
+    (see save_output_file()). With `delete`, then delete it, and remove the
     folder `remove_dir` (when given) if that leaves it empty.
     """
     try:
@@ -336,6 +340,7 @@ def check_output_file(page, record, output_path, delete=False, remove_dir=None):
         record["status"] = "%s was not created" % output_path
     else:
         print("\n[rstudio-local] session %s: %s is %d bytes" % (record["session_name"], output_path, size))
+        save_output_file(page, record["session_name"], output_path, size=size)
     if not delete or size is None:
         return
     try:

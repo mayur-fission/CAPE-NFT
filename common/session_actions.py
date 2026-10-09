@@ -7,6 +7,7 @@ Multi-step flows live in session_scenarios.py, session_batch.py and
 session_concurrent.py.
 """
 from common.config import env
+from common.evidence import save_screenshot
 from common.rstudio_console_commands import (  # noqa: F401 - re-exported
     get_console_output,
     is_console_command_done,
@@ -36,6 +37,7 @@ WORKING_DIR = env("RSTUDIO_WORKING_DIR")
 
 def login_to_posit_workbench(page, user=1):
     """Log into RSTUDIO_BASE_URL as `user` and return the session list URL.
+    Screenshots the page after signing in as login_<username>.png.
 
     user=1 uses RSTUDIO_USER1/RSTUDIO_PASSWORD; user=N uses
     RSTUDIO_USER<N>/RSTUDIO_PASSWORD<N>.
@@ -44,7 +46,9 @@ def login_to_posit_workbench(page, user=1):
     password_suffix = "" if user == 1 else str(user)
     username = env("RSTUDIO_USER%s" % user, required=True)
     password = env("RSTUDIO_PASSWORD%s" % password_suffix, required=True)
-    return _login(page, base_url, username=username, password=password)
+    home_url = _login(page, base_url, username=username, password=password)
+    save_screenshot(page, "login_%s.png" % username)
+    return home_url
 
 
 def print_active_session_count(page, home_url, label=None):

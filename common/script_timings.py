@@ -13,6 +13,7 @@ from datetime import datetime
 from config.perf_report import write_csv_report
 
 from common.config import EVIDENCE_DIR
+from common.evidence import save_screenshot
 from common.rstudio_console_commands import (
     is_console_command_done,
     submit_console_command,
@@ -45,6 +46,7 @@ def run_timed_console_command(page, session_name, command, timeout_ms, script_ru
         script_runs.append(record)
     try:
         marker, record["started"] = submit_console_command(page, command)
+        save_screenshot(page, "console_input_%s.png" % session_name)
         elapsed_s = wait_for_console_command(page, marker, record["started"], timeout_ms=timeout_ms)
     except Exception as exc:
         timed_out = (
@@ -52,9 +54,12 @@ def run_timed_console_command(page, session_name, command, timeout_ms, script_ru
             and time.time() - record["started"] >= timeout_ms / 1000.0
         )
         record["status"] = "timed out" if timed_out else str(exc)
+        save_screenshot(page, "console_%s_%s.png" % ("timeout" if timed_out else "failed", session_name),
+                        always=True)
         raise
     record["ended"] = record["started"] + elapsed_s
     record["status"] = "ok"
+    save_screenshot(page, "console_output_%s.png" % session_name)
     return elapsed_s
 
 
@@ -74,7 +79,8 @@ def run_timed_console_command_repeatedly(page, session_name, command, timeout_ms
 
 def submit_in_each(ready, command):
     """Submit `command` without waiting in each (page, record, context) of
-    `ready`, setting record["started"]. Returns the (page, marker, record,
+    `ready`, setting record["started"], and screenshot each console as
+    console_input_<session name>.png. Returns the (page, marker, record,
     context) tuples for wait_for_console_runs(); a submit that fails is
     recorded in its record instead.
     """
@@ -85,6 +91,9 @@ def submit_in_each(ready, command):
             pending.append((page, marker, record, context))
         except Exception as exc:
             record["status"] = "submit failed: %s" % exc
+            save_screenshot(page, "console_failed_%s.png" % record["session_name"], always=True)
+    for page, _, record, _ in pending:
+        save_screenshot(page, "console_input_%s.png" % record["session_name"])
     return pending
 
 
@@ -99,6 +108,9 @@ def wait_for_console_runs(pending, timeout_ms, poll_interval_ms=500, on_done=Non
     while checking it. on_done/on_timeout(page, record, context) run when a
     command finishes / times out (on_done may set an error status, e.g. for
     a missing output file); on_poll() runs once per round - keep it quick.
+    Each console is screenshotted when its command finishes
+    (console_output_<session name>.png, before on_done) or times out
+    (console_timeout_<session name>.png).
     """
     pending = list(pending)
     while pending:
@@ -114,11 +126,13 @@ def wait_for_console_runs(pending, timeout_ms, poll_interval_ms=500, on_done=Non
             if done:
                 record["ended"], record["status"] = time.time(), "ok"
                 pending.remove(item)
+                save_screenshot(page, "console_output_%s.png" % record["session_name"])
                 if on_done:
                     on_done(page, record, context)
             elif time.time() - record["started"] >= timeout_ms / 1000.0:
                 record["status"] = "timed out"
                 pending.remove(item)
+                save_screenshot(page, "console_timeout_%s.png" % record["session_name"], always=True)
                 if on_timeout:
                     on_timeout(page, record, context)
         if on_poll:

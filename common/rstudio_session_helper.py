@@ -9,6 +9,7 @@ from contextlib import contextmanager
 
 from common import locators
 from common.config import env
+from common.evidence import save_screenshot
 
 SESSION_TYPE = env("RSTUDIO_SESSION_TYPE", "RStudio Pro")
 
@@ -86,14 +87,23 @@ def _count_response_bytes(page):
         page.remove_listener("response", _on_response)
 
 
-def _click_and_wait_for_ide(page, target, session_name, timeout_ms):
+def _click_and_wait_for_ide(page, target, session_name, timeout_ms, step):
     """Click `target` and wait for the session IDE's Console. Returns a
-    SessionLaunch timed from the click."""
-    with _count_response_bytes(page) as received:
-        started = time.time()
-        target.click()
-        page.get_by_text(locators.CONSOLE_TAB_TEXT, exact=True).first.wait_for(state="visible", timeout=timeout_ms)
-        elapsed = time.time() - started
+    SessionLaunch timed from the click. Screenshots the IDE as
+    <step>_<session name>.png (after the timing), or the page as
+    <step>_failed_<session name>.png if the IDE does not show."""
+    try:
+        with _count_response_bytes(page) as received:
+            started = time.time()
+            target.click()
+            page.get_by_text(locators.CONSOLE_TAB_TEXT, exact=True).first.wait_for(
+                state="visible", timeout=timeout_ms
+            )
+            elapsed = time.time() - started
+    except Exception:
+        save_screenshot(page, "%s_failed_%s.png" % (step, session_name), always=True)
+        raise
+    save_screenshot(page, "%s_%s.png" % (step, session_name))
     return SessionLaunch(elapsed_s=elapsed, bytes_received=received[0], session_name=session_name)
 
 
@@ -112,7 +122,7 @@ def open_existing_session(page, home_url, session_name, timeout_ms=60000):
             "no session named %r found on the session list - it must already "
             "exist and be joinable (Active or Suspended)" % session_name
         )
-    return _click_and_wait_for_ide(page, link.first, session_name, timeout_ms)
+    return _click_and_wait_for_ide(page, link.first, session_name, timeout_ms, "session_opened")
 
 
 def is_session_listed(page, home_url, session_name, timeout_ms=5000):
@@ -143,7 +153,8 @@ def launch_new_session(page, home_url, session_name=None, timeout_ms=60000):
     page.get_by_role(locators.SESSION_NAME_FIELD_ROLE, name=locators.SESSION_NAME_FIELD_NAME).fill(session_name)
     launch = page.get_by_role("button", name=locators.LAUNCH_BUTTON)
     launch.wait_for(state="visible", timeout=10000)
-    return _click_and_wait_for_ide(page, launch, session_name, timeout_ms)
+    save_screenshot(page, "session_create_dialog_%s.png" % session_name)
+    return _click_and_wait_for_ide(page, launch, session_name, timeout_ms, "session_launched")
 
 
 def is_session_alive(page):

@@ -122,22 +122,39 @@ def write_json_report(path, stats):
 
 
 def write_csv_report(path, rows):
+    """Write `rows` to the CSV `path` and attach it to the Allure report."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", newline="") as fh:
         csv.writer(fh).writerows(rows)
+    attach_allure_file(path)
 
 
 def attach_allure_reports(stats, csv_path):
-    """Attaches the JSON stats and the CSV to the Allure report. No-ops if
-    allure-pytest isn't installed.
+    """Attaches the JSON stats to the Allure report (write_csv_report()
+    already attached the CSV). No-ops if allure-pytest isn't installed.
     """
     if not HAS_ALLURE:
         return
     allure.attach(
         json.dumps(stats, indent=2), name="launch_perf_stats", attachment_type=allure.attachment_type.JSON
     )
-    with open(csv_path) as fh:
-        allure.attach(fh.read(), name="aggregate_report", attachment_type=allure.attachment_type.CSV)
+
+
+def attach_allure_file(path, name=None):
+    """Attach the file at `path` (a .png screenshot or a .csv) to the running
+    test's Allure report, named `name` (default: the file name). No-ops if
+    allure-pytest isn't installed; errors are printed, not raised.
+    """
+    if not HAS_ALLURE:
+        return
+    attachment_type = {
+        ".png": allure.attachment_type.PNG,
+        ".csv": allure.attachment_type.CSV,
+    }.get(os.path.splitext(path)[1].lower(), allure.attachment_type.TEXT)
+    try:
+        allure.attach.file(path, name=name or os.path.basename(path), attachment_type=attachment_type)
+    except Exception as exc:
+        print("\n[rstudio-local] could not attach %s to the Allure report: %s" % (path, exc))
 
 
 def allure_step(name):

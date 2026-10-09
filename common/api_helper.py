@@ -17,6 +17,7 @@ import requests
 from openpyxl import Workbook
 
 from common.config import REPO_ROOT, env
+from config.perf_report import attach_allure_file
 
 _TESTDATA_DIR = os.path.join(REPO_ROOT, "testdata")
 _LAUNCH_FIELDS = ("session_id", "project_id", "url")
@@ -294,11 +295,13 @@ def session_ids_csv_path(user, ids_csv_path=None):
 
 
 def write_session_ids(csv_path, sessions):
-    """Overwrite csv_path with [{session_name, session_id, project_id, url}]."""
+    """Overwrite csv_path with [{session_name, session_id, project_id, url}]
+    and attach it to the Allure report."""
     with open(csv_path, "w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=("session_name",) + _LAUNCH_FIELDS)
         writer.writeheader()
         writer.writerows(sessions)
+    attach_allure_file(csv_path)
 
 
 def update_session_ids(csv_path, sessions):

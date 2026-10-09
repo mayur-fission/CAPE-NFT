@@ -3,6 +3,7 @@
 option parsing. `label` (e.g. "user1") only prefixes printed progress lines.
 """
 from common.cloudwatch_metrics import capture_db_metrics, capture_server_metrics
+from common.evidence import save_screenshot
 from common.rstudio_session_helper import goto_session_list, next_session_names, row_ids
 from common.script_timings import (
     new_run_record,
@@ -182,6 +183,7 @@ def run_command_concurrently_in_tabs_scenario(
             record = new_run_record(session_name)
             records.append(record)
             marker, record["started"] = submit_console_command(tab, command)
+            save_screenshot(tab, "console_input_%s.png" % session_name)
             record["status"] = "running"
             pending.append((tab, marker, record, i))
             print("[rstudio-local] %s: %d/%d opened tab and submitted %r (%s) - not waiting for it to finish"
