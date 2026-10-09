@@ -18,6 +18,10 @@ SessionLaunch = namedtuple("SessionLaunch", ["elapsed_s", "bytes_received", "ses
 
 AUTO_PERF_NAME_PREFIX = "AUTO_PERF_SESSION_"
 RUN_R_SESSION_NAME_PREFIX = "Run_R_session_"
+# Every prefix the UI tests name their sessions with (the user1/user2 tests
+# use AUTO_SESSION_U<n>_), so teardown only quits sessions they could have
+# created, not other people's on a shared account.
+AUTOMATION_NAME_PREFIXES = (AUTO_PERF_NAME_PREFIX, RUN_R_SESSION_NAME_PREFIX, "AUTO_SESSION_U")
 
 # The session table re-renders shortly after "New Session" appears.
 SESSION_LIST_SETTLE_MS = 1500
@@ -111,6 +115,18 @@ def open_existing_session(page, home_url, session_name, timeout_ms=60000):
     return _click_and_wait_for_ide(page, link.first, session_name, timeout_ms)
 
 
+def is_session_listed(page, home_url, session_name, timeout_ms=5000):
+    """Whether a session named `session_name` is on the session list (in any
+    state). Navigates `page` to the session list."""
+    goto_session_list(page, home_url)
+    link = page.get_by_role("link", name=session_name, exact=True)
+    try:
+        link.first.wait_for(state="visible", timeout=timeout_ms)
+    except Exception:
+        return False
+    return True
+
+
 def launch_new_session(page, home_url, session_name=None, timeout_ms=60000):
     """Launch a new session via the New Session dialog and wait for its IDE
     (Launch replaces the page's content rather than opening a tab).
@@ -144,6 +160,40 @@ def row_ids(page):
     return set(page.eval_on_selector_all(
         locators.SESSION_STATUS_CELL_SELECTOR, "els => els.map(el => el.getAttribute('data-testid'))"
     ))
+
+
+def _row_words(page):
+    """{row id: set of the words in that row} for the session list, read in
+    one atomic call like row_ids(). A session's name is one of its row's
+    words (our names have no spaces), also on failed-launch rows where it
+    may not be a link."""
+    pairs = page.eval_on_selector_all(
+        locators.SESSION_STATUS_CELL_SELECTOR,
+        """els => els.map(el => {
+            const row = el.closest('tr');
+            return [el.getAttribute('data-testid'), row ? row.innerText.split(/\\s+/) : []];
+        })""",
+    )
+    return {row_id: set(words) for row_id, words in pairs}
+
+
+def session_row_ids_by_name(page, session_names):
+    """{name: {row id, ...}} for the rows on the session list named exactly
+    one of `session_names` (a name can have several rows). `page` must show
+    the session list."""
+    names = set(session_names)
+    ids_by_name = {}
+    for row_id, words in _row_words(page).items():
+        for name in words & names:
+            ids_by_name.setdefault(name, set()).add(row_id)
+    return ids_by_name
+
+
+def session_row_ids_with_prefix(page, prefixes):
+    """Row ids on the session list whose session name starts with one of
+    `prefixes`. `page` must show the session list."""
+    prefixes = tuple(prefixes)
+    return {row_id for row_id, words in _row_words(page).items() if any(w.startswith(prefixes) for w in words)}
 
 
 def get_active_session_count(page):

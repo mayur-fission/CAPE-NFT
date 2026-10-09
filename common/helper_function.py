@@ -118,7 +118,7 @@ def launch_sessions_scenario(page, home_url, before_ids, session_names, attempts
             % (label, len(session_names), format_timings(timings))
         )
     finally:
-        cleanup_and_verify_sessions(page, home_url, before_ids)
+        cleanup_and_verify_sessions(page, home_url, before_ids, session_names=session_names)
 
 
 def run_command_in_tabs_scenario(
@@ -152,7 +152,7 @@ def run_command_in_tabs_scenario(
     finally:
         write_script_timings_csv(csv_path or script_timings_csv_path("%s_sequential_tabs" % label), script_runs)
         close_tabs(tabs)
-        cleanup_and_verify_sessions(page, home_url, before_ids)
+        cleanup_and_verify_sessions(page, home_url, before_ids, session_names=session_names)
 
 
 def run_command_concurrently_in_tabs_scenario(
@@ -208,7 +208,7 @@ def run_command_concurrently_in_tabs_scenario(
     finally:
         write_script_timings_csv(csv_path or script_timings_csv_path("%s_concurrent_tabs" % label), records)
         close_tabs(tabs)
-        cleanup_and_verify_sessions(page, home_url, before_ids)
+        cleanup_and_verify_sessions(page, home_url, before_ids, session_names=session_names)
 
 
 # --- Results and metrics ------------------------------------------------------

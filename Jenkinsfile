@@ -33,6 +33,9 @@ TEST_FILES = [
     'test_launch_sessions_api_user1'                      : 'Create / relaunch sessions through the API only',
     'test_create_session_through_api_and_run_script'      : 'API-created sessions driven in the browser',
     'test_create_session_through_api_and_run_script_group': 'API-created sessions, mixed workloads',
+    'test_create_session_through_ui_and_run_script_group' : 'UI-created sessions, mixed workloads',
+    'test_create_session_through_ui_and_run_script_group_multi_browser':
+        'UI-created sessions, mixed workloads, in UI_BROWSERS browsers launching in parallel (B1_, B2_, ... name prefixes)',
     'test_launch_existing_session_and_run_r_scripts'      : 'Reuse existing API sessions',
 ]
 TEST_NAMES = new ArrayList(TEST_FILES.keySet())
@@ -49,6 +52,13 @@ def jobParams = [
 for (name in TEST_NAMES) {
     jobParams << booleanParam(name: name, defaultValue: false, description: TEST_FILES[name])
 }
+jobParams << string(name: 'UI_BROWSERS', defaultValue: '2',
+    description: 'Multi-browser test: number of browsers. Each opens one tab per session name in the group CSVs ' +
+                 '(5 today), so 2 browsers = 10 sessions')
+jobParams << string(name: 'UI_BROWSER_STAGGER_S', defaultValue: '30',
+    description: 'Multi-browser test: seconds between starting one browser and the next, so logins do not clash')
+jobParams << string(name: 'GROUP_TEST_DURATION_S', defaultValue: '180',
+    description: 'Group tests (API, UI and multi-browser): how long the workloads run, in seconds')
 jobParams << string(name: 'PYTEST_K', defaultValue: '', description: 'Optional pytest -k filter applied within the selected files (e.g. "concurrent")')
 jobParams << string(name: 'EXTRA_PYTEST_ARGS', defaultValue: '', description: 'Optional extra pytest arguments (e.g. "-x" or "--maxfail=2")')
 
@@ -80,6 +90,11 @@ pipeline {
 
     environment {
         PYTHONUNBUFFERED = '1'
+        PYTHONUTF8 = '1'
+        PYTHONIOENCODING = 'utf-8'
+        // '0' = install Playwright browsers inside the venv (site-packages), so the
+        // Jenkins service account's user profile folder is not needed.
+        PLAYWRIGHT_BROWSERS_PATH = '0'
     }
 
     stages {
@@ -89,6 +104,12 @@ pipeline {
                     def selected = params.RUN_ALL ? TEST_NAMES : TEST_NAMES.findAll { params[it] }
                     if (!selected) {
                         error('No tests selected. Tick at least one test checkbox (or RUN_ALL) and build again.')
+                    }
+                    ['UI_BROWSERS', 'UI_BROWSER_STAGGER_S', 'GROUP_TEST_DURATION_S'].each { name ->
+                        def value = params[name]?.trim()
+                        if (!(value ==~ /\d+/) || (name == 'UI_BROWSERS' && value.toInteger() < 1)) {
+                            error("${name} must be a whole number${name == 'UI_BROWSERS' ? ' of at least 1' : ''}, got '${params[name]}'")
+                        }
                     }
                     env.TEST_PATHS = selected.collect { "tests/${it}.py" }.join(' ')
                     currentBuild.description = "${params.ENVIRONMENT}: " +
@@ -107,19 +128,31 @@ pipeline {
                 script {
                     if (isUnix()) {
                         sh '''
+                            set -e
                             python3 -m venv .venv
-                            . .venv/bin/activate
-                            pip install --upgrade pip
-                            pip install -r requirements.txt
-                            playwright install chromium
+                            .venv/bin/python -m pip install --upgrade pip
+                            .venv/bin/python -m pip install -r requirements.txt
+                            .venv/bin/python -m playwright install chromium
                         '''
                     } else {
+                        // Each command is checked, so the build stops at the exact
+                        // line that fails (a bat step only reports the LAST exit code).
                         bat '''
+                            @echo on
+                            python --version
+                            if errorlevel 1 exit /b 1
+
                             python -m venv .venv
-                            call .venv\\Scripts\\activate.bat
-                            python -m pip install --upgrade pip
-                            pip install -r requirements.txt
-                            playwright install chromium
+                            if errorlevel 1 exit /b 1
+
+                            .venv\\Scripts\\python.exe -m pip install --upgrade pip
+                            if errorlevel 1 exit /b 1
+
+                            .venv\\Scripts\\python.exe -m pip install -r requirements.txt
+                            if errorlevel 1 exit /b 1
+
+                            .venv\\Scripts\\python.exe -m playwright install chromium
+                            if errorlevel 1 exit /b 1
                         '''
                     }
                 }
@@ -130,25 +163,32 @@ pipeline {
             steps {
                 // The tests load .env from the repo root (common/config.py).
                 // Dev -> 'cape-nft-env-dev', QA -> 'cape-nft-env-qa'.
-                withCredentials([file(credentialsId: "cape-nft-env-${params.ENVIRONMENT.toLowerCase()}", variable: 'ENV_FILE')]) {
-                    script {
-                        if (isUnix()) {
-                            sh 'cp "$ENV_FILE" .env'
-                        } else {
-                            bat 'copy /Y "%ENV_FILE%" .env'
-                        }
+                // Settings for the group tests; .env overrides them if it sets the same names.
+                withEnv([
+                    "GROUP_SESSIONS_UI_BROWSERS=${params.UI_BROWSERS.trim()}",
+                    "GROUP_SESSIONS_UI_BROWSER_STAGGER_S=${params.UI_BROWSER_STAGGER_S.trim()}",
+                    "GROUP_SESSIONS_TEST_DURATION_S=${params.GROUP_TEST_DURATION_S.trim()}",
+                ]) {
+                    withCredentials([file(credentialsId: "cape-nft-env-${params.ENVIRONMENT.toLowerCase()}", variable: 'ENV_FILE')]) {
+                        script {
+                            if (isUnix()) {
+                                sh 'cp "$ENV_FILE" .env'
+                            } else {
+                                bat 'copy /Y "%ENV_FILE%" .env'
+                            }
 
-                        def kArg = params.PYTEST_K?.trim() ? "-k \"${params.PYTEST_K.trim()}\"" : ''
-                        def args = "${env.TEST_PATHS} -v ${kArg} ${params.EXTRA_PYTEST_ARGS ?: ''} " +
-                                   '--junitxml=evidence/junit.xml --alluredir=evidence/allure-results'
-                        def activate = isUnix() ? '. .venv/bin/activate' : 'call .venv\\Scripts\\activate.bat'
-                        def status = runStatus("${activate} && python -m pytest ${args}")
+                            def kArg = params.PYTEST_K?.trim() ? "-k \"${params.PYTEST_K.trim()}\"" : ''
+                            def args = "${env.TEST_PATHS} -v ${kArg} ${params.EXTRA_PYTEST_ARGS ?: ''} " +
+                                       '--junitxml=evidence/junit.xml --alluredir=evidence/allure-results'
+                            def py = isUnix() ? '.venv/bin/python' : '.venv\\Scripts\\python.exe'
+                            def status = runStatus("${py} -m pytest ${args}")
 
-                        // pytest exit codes: 0 passed, 1 some tests failed, 2+ run broke.
-                        if (status == 1) {
-                            unstable('Some tests failed')
-                        } else if (status > 1) {
-                            error("pytest exited with code ${status}")
+                            // pytest exit codes: 0 passed, 1 some tests failed, 2+ run broke.
+                            if (status == 1) {
+                                unstable('Some tests failed')
+                            } else if (status > 1) {
+                                error("pytest exited with code ${status}")
+                            }
                         }
                     }
                 }

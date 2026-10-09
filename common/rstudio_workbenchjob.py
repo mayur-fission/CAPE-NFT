@@ -16,7 +16,12 @@ from common.rstudio_console_commands import (
 )
 from common.rstudio_session_helper import launch_new_session, open_existing_session
 from common.script_timings import new_run_record, submit_in_each, wait_for_console_runs
-from common.session_actions import create_folder, delete_file, set_session_working_directory
+from common.session_actions import (
+    close_all_editor_files,
+    delete_file,
+    recreate_session_folder,
+    set_session_working_directory,
+)
 
 DEFAULT_WORKBENCH_JOB_SCRIPT = "/home/posit/sample_run_sleep.R"
 
@@ -24,20 +29,51 @@ def open_workbench_jobs_tab(page, timeout_ms=10000):
     """Click the Workbench Jobs tab next to the Console."""
     tab = page.locator(locators.WORKBENCH_JOBS_TAB_SELECTOR)
     tab.wait_for(state="visible", timeout=timeout_ms)
+    dismiss_open_dialogs(page)
     tab.click()
+
+
+def dismiss_open_dialogs(page, timeout_ms=5000):
+    """Close any modal dialog left open in the IDE (its overlay blocks every
+    click) with Escape, printing what it said. Returns the dialogs' texts.
+    """
+    dialogs = page.locator(locators.DIALOG_SELECTOR)
+    glass = page.locator(locators.MODAL_GLASS_SELECTOR)
+    texts = []
+    for _ in range(3):
+        visible = [dialogs.nth(i) for i in range(dialogs.count()) if dialogs.nth(i).is_visible()]
+        glass_up = any(glass.nth(i).is_visible() for i in range(glass.count()))
+        if not visible and not glass_up:
+            break
+        for dialog in visible:
+            text = " ".join((dialog.get_attribute("aria-label") or "").split() + dialog.inner_text().split())
+            texts.append(text)
+            print("[rstudio-local] closing a dialog left open: %s" % text[:300])
+        if not visible:
+            print("[rstudio-local] a modal overlay with no dialog is blocking the IDE, pressing Escape")
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(timeout_ms if not visible else 0)
+        if visible:
+            try:
+                visible[-1].wait_for(state="hidden", timeout=timeout_ms)
+            except Exception:
+                pass
+    return texts
 
 
 def open_start_workbench_job_dialog(page, timeout_ms=10000, attempts=3):
     """Click Start Workbench Job in the Workbench Jobs pane and return the
     dialog locator. Retries the click: right after the pane opens, the button
-    is visible but a click can be ignored.
+    is visible but a click can be ignored. Dialogs left open by something
+    else (their overlay intercepts the click) are closed first.
     """
     button = page.locator(locators.START_WORKBENCH_JOB_BUTTON_SELECTOR)
     dialog = page.locator("[role='dialog']").filter(has_text=locators.WORKBENCH_JOB_DIALOG_TITLE).last
     button.wait_for(state="visible", timeout=timeout_ms)
     for attempt in range(attempts):
-        button.click()
+        dismiss_open_dialogs(page)
         try:
+            button.click(timeout=timeout_ms)
             dialog.wait_for(state="visible", timeout=timeout_ms)
             return dialog
         except Exception:
@@ -352,7 +388,8 @@ def launch_sessions_and_run_script(context, home_url, session_count, script_path
     """Launch `session_count` new sessions, each in its own tab, and setwd to
     `working_dir` (default RSTUDIO_WORKING_DIR; skipped if neither is set).
     With per_session_dir, each session instead gets its own
-    `working_dir`/<session name> folder (created if missing), so sessions
+    `working_dir`/<session name> folder (emptied first: data left there by
+    an earlier run is deleted, see recreate_session_folder()), so sessions
     writing the same relative file don't overwrite each other.
 
     Once every session is up, source `script_path` in each console (into a
@@ -387,9 +424,10 @@ def launch_sessions_and_run_script(context, home_url, session_count, script_path
             try:
                 launch = launch_new_session(tab, home_url)
                 record["session_name"] = launch.session_name
+                close_all_editor_files(tab, launch.session_name)
                 session_dir = posixpath.join(working_dir, launch.session_name) if per_session_dir else None
                 if session_dir:
-                    create_folder(tab, session_dir)
+                    recreate_session_folder(tab, working_dir, launch.session_name)
                 set_session_working_directory(tab, path=session_dir or working_dir)
                 ready.append((tab, record, session_dir))
                 print("\n[rstudio-local] session %s launched in %.2fs" % (launch.session_name, launch.elapsed_s))

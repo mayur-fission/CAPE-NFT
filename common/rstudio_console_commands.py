@@ -35,11 +35,44 @@ def r_string(value):
     return '"%s"' % escaped
 
 
-def _type_command(page, command):
-    """Type `command` into the console input and press Enter."""
-    page.locator(locators.CONSOLE_INPUT_SELECTOR).first.click(force=True)
+def _type_command(page, command, marker=None, attempts=3, echo_timeout_ms=10000):
+    """Type `command` into the console input and press Enter.
+
+    With `marker` (split into `command` by _r_split_literal()), also wait
+    until the console shows the command was taken: its echo or its output
+    contains the marker's second half. Right after a session loads the IDE
+    can steal focus and drop the keystrokes; then the input is empty and
+    the command is typed again, or if it is still sitting in the input,
+    Enter is pressed again. Raises RuntimeError if it is never taken.
+    """
+    console_input = page.locator(locators.CONSOLE_INPUT_SELECTOR).first
+    console_input.click(force=True)
     page.keyboard.type(command)
     page.keyboard.press("Enter")
+    if marker is None:
+        return
+
+    fragment = marker[len(marker) // 2:]
+    for attempt in range(attempts):
+        deadline = time.time() + echo_timeout_ms / 1000.0
+        while time.time() < deadline:
+            if fragment in get_console_output(page):
+                return
+            page.wait_for_timeout(_POLL_INTERVAL_MS)
+        if attempt + 1 == attempts:
+            break
+        console_input.click(force=True)
+        typed = " ".join(page.locator(locators.CONSOLE_INPUT_TEXT_SELECTOR).first.inner_text().split())
+        if typed == " ".join(command.split()):
+            print("[rstudio-local] console command not submitted, pressing Enter again")
+        else:
+            print("[rstudio-local] console command was lost, typing it again")
+            if typed:  # only part of it arrived
+                page.keyboard.press("Control+A")
+                page.keyboard.press("Backspace")
+            page.keyboard.type(command)
+        page.keyboard.press("Enter")
+    raise RuntimeError("the console did not take the command %r" % command[:120])
 
 
 def read_console_value(page, r_expr, timeout_ms=10000):
@@ -49,7 +82,7 @@ def read_console_value(page, r_expr, timeout_ms=10000):
     nothing is printed within timeout_ms (including when `r_expr` errors).
     """
     marker = _unique_marker("VAL")
-    _type_command(page, "cat(%s, '=', %s, '\\n', sep='')" % (_r_split_literal(marker), r_expr))
+    _type_command(page, "cat(%s, '=', %s, '\\n', sep='')" % (_r_split_literal(marker), r_expr), marker=marker)
 
     pattern = re.compile(re.escape(marker) + r"=(.*)")
     console = page.locator(locators.CONSOLE_OUTPUT_SELECTOR)
@@ -75,6 +108,7 @@ def _read_console_block(page, r_statements, timeout_ms, what):
         page,
         "cat(%s, '\\n', sep=''); %s; cat('\\n', %s, '\\n', sep='')"
         % (_r_split_literal(start), r_statements, _r_split_literal(end)),
+        marker=start,
     )
 
     # Only horizontal whitespace is tolerated around the marker lines - a
@@ -119,21 +153,18 @@ def get_file_list(page, path, recursive=False, timeout_ms=15000):
     return body.split(_FILE_LIST_SEPARATOR) if body else []
 
 
-def submit_console_command(page, command):
-    """Type `command` into the console and press Enter without waiting.
+def submit_console_command(page, command, confirm=True):
+    """Type `command` into the console and press Enter without waiting for
+    it to finish. With confirm (see _type_command()), retypes it if the
+    keystrokes were lost.
 
     Returns (marker, started) for is_console_command_done() or
-    wait_for_console_command().
+    wait_for_console_command(); started is when the command was taken.
     """
     marker = _unique_marker("DONE")
     full_command = "%s; cat(%s, '\\n', sep='')" % (command, _r_split_literal(marker))
-
-    page.locator(locators.CONSOLE_INPUT_SELECTOR).first.click(force=True)
-    page.keyboard.type(full_command)
-
-    started = time.time()
-    page.keyboard.press("Enter")
-    return marker, started
+    _type_command(page, full_command, marker=marker if confirm else None)
+    return marker, time.time()
 
 
 def is_console_command_done(page, marker):
@@ -176,7 +207,8 @@ def wait_for_console_ready(page, timeout_ms=120000, probe_interval_ms=15000, pol
 
     markers = []
     while time.time() < deadline:
-        markers.append(submit_console_command(page, "invisible(NULL)")[0])
+        # Not confirmed: this loop re-sends the probe itself.
+        markers.append(submit_console_command(page, "invisible(NULL)", confirm=False)[0])
         probe_deadline = min(deadline, time.time() + probe_interval_ms / 1000.0)
         while time.time() < probe_deadline:
             output = page.locator(locators.CONSOLE_OUTPUT_SELECTOR).inner_text()

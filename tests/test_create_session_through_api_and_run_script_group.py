@@ -10,23 +10,16 @@ opened in the browser and driven at the same time for TEST_DURATION_S:
 
 Workload helpers are in common/api_ui_combo.py.
 """
-import time
-
 import pytest
 
 from common.api_helper import group_sessions_csv_paths, session_ids_csv_path
 from common.api_ui_combo import (
-    ListFilesLoop,
-    check_workbench_jobs,
     clean_up,
     create_sessions_from_csvs,
-    ms_left,
     open_sessions,
-    report_failed_runs,
-    start_workbench_jobs,
+    run_group_workloads,
 )
 from common.config import env
-from common.launch_already_created_sessions import run_script_in_launched_sessions
 from common.script_timings import script_timings_csv_path, write_script_timings_csv
 
 pytestmark = pytest.mark.rstudio_local
@@ -35,7 +28,7 @@ CSV_SESSIONS_USER = int(env("CSV_SESSIONS_USER", "1"))
 GROUP_CSVS = group_sessions_csv_paths(("test", "a", "b", "c"))
 SESSION_IDS_CSV = session_ids_csv_path(CSV_SESSIONS_USER)
 TIMINGS_LABEL = "new_api_sessions_U%d" % CSV_SESSIONS_USER
-SCRIPT_PATH = env("CSV_SESSIONS_SCRIPT", "/home/posit/generate_10kb_csv.R")
+SCRIPT_PATH = env("CSV_SESSIONS_SCRIPT", "/home/posit/batch_mayur/generate_10kb_csv.R")
 OUTPUT_DIR = env("CSV_SESSIONS_OUTPUT_DIR", "/home/posit")
 OUTPUT_FILE_NAME = "generated_data_10kb.csv"
 TEST_DURATION_S = int(env("GROUP_SESSIONS_TEST_DURATION_S", "300"))
@@ -67,23 +60,11 @@ def test_api_created_session_groups_run_mixed_workloads(context):
         launched = open_sessions(context, CSV_SESSIONS_USER, [s["session_name"] for s in created])
         by_name = {s.session_name: s for s in launched}
         groups = {g: [by_name[name] for name in names_by_csv[path]] for g, path in GROUP_CSVS.items()}
-        started = time.time()
-        deadline = started + TEST_DURATION_S
-
-        # Jobs run on their own once started; list.files() runs between the
-        # script polls and then until the deadline.
-        job_runs, jobs = start_workbench_jobs(groups["b"], WORKBENCH_JOB_SCRIPT_PATH, OUTPUT_DIR)
-        runs += job_runs
-        list_files = ListFilesLoop(groups["a"], OUTPUT_DIR, deadline, LIST_FILES_INTERVAL_S)
-        runs += run_script_in_launched_sessions(
-            groups["test"], SCRIPT_PATH, working_dir=OUTPUT_DIR, timeout_ms=ms_left(deadline),
-            output_path=OUTPUT_FILE_NAME, per_session_dir=True, on_poll=list_files.tick,
+        run_group_workloads(
+            groups, runs, TIMINGS_LABEL, TEST_DURATION_S, SCRIPT_PATH, OUTPUT_DIR, OUTPUT_FILE_NAME,
+            WORKBENCH_JOB_SCRIPT_PATH, LIST_FILES_INTERVAL_S,
         )
-        runs += list_files.run_until_deadline()
-        check_workbench_jobs(jobs)
-
-        failures = report_failed_runs(runs, TIMINGS_LABEL, started, idle_sessions=groups["c"])
-        assert not failures, "runs that did not finish: %s" % failures
     finally:
         write_script_timings_csv(script_timings_csv_path(TIMINGS_LABEL), runs)
         clean_up(launched, created, CSV_SESSIONS_USER, groups.get("b", ()), WORKBENCH_JOB_SCRIPT_PATH)
+

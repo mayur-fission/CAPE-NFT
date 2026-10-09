@@ -75,4 +75,4 @@ def test_multiple_sessions_stay_alive_while_idle(page, context):
         )
     finally:
         close_tabs(tabs)
-        cleanup_and_verify_sessions(page, home_url, before_ids)
+        cleanup_and_verify_sessions(page, home_url, before_ids, session_names=planned_names)

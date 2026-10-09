@@ -3,7 +3,15 @@ instance was left as the test found it.
 """
 import time
 
-from common.rstudio_session_helper import bulk_quit_sessions, goto_session_list, quit_session, row_ids
+from common.rstudio_session_helper import (
+    AUTOMATION_NAME_PREFIXES,
+    bulk_quit_sessions,
+    goto_session_list,
+    quit_session,
+    row_ids,
+    session_row_ids_by_name,
+    session_row_ids_with_prefix,
+)
 
 
 def cleanup_multiple_sessions(page, ids, timeout_ms=8000, poll_interval_ms=300, max_attempts=3):
@@ -41,27 +49,62 @@ def cleanup_multiple_sessions(page, ids, timeout_ms=8000, poll_interval_ms=300, 
                 )
 
 
-def cleanup_and_verify_sessions(page, home_url, before_ids):
-    """Quit every session created since `before_ids` (from row_ids() at the
-    start of the test) and assert none are left. Pre-existing sessions that
-    vanished are only reported (someone else's activity on a shared
-    instance). Returns the ids that were quit.
+def quit_sessions_named(page, home_url, session_names):
+    """Quit every listed session (in any state) whose name is in
+    `session_names`, so they can be created afresh. Returns the names that
+    were quit; raises RuntimeError if any are still listed afterwards.
     """
     goto_session_list(page, home_url, settle_ms=2000)
-    created_ids = row_ids(page) - before_ids
+    ids_by_name = session_row_ids_by_name(page, session_names)
+    if not ids_by_name:
+        return []
+    print("\n[rstudio-local] quitting existing session(s) with the same name: %s" % ", ".join(sorted(ids_by_name)))
+
+    cleanup_multiple_sessions(page, set().union(*ids_by_name.values()))
+    page.wait_for_timeout(1000)
+    left = sorted(session_row_ids_by_name(page, ids_by_name))
+    if left:
+        raise RuntimeError("existing sessions that could not be quit: %s" % left)
+    return sorted(ids_by_name)
+
+
+def cleanup_and_verify_sessions(page, home_url, before_ids, session_names=None,
+                                name_prefixes=AUTOMATION_NAME_PREFIXES):
+    """Quit the sessions this test created and assert none are left: rows
+    not in `before_ids` (from row_ids() at the start of the test) that are
+    named one of `session_names`, or, if no names are given, whose name
+    starts with one of `name_prefixes`.
+
+    Other new rows (other people's sessions on a shared account, Workbench
+    job rows, ...) are left alone and only reported, as are pre-existing
+    sessions that vanished. Returns the ids that were quit.
+    """
+    goto_session_list(page, home_url, settle_ms=2000)
+    new_ids = row_ids(page) - before_ids
+    if session_names is not None:
+        ours = set().union(set(), *session_row_ids_by_name(page, session_names).values())
+    else:
+        ours = session_row_ids_with_prefix(page, name_prefixes)
+    created_ids = new_ids & ours
 
     cleanup_multiple_sessions(page, created_ids)
 
     page.wait_for_timeout(1000)
     remaining_ids = row_ids(page)
-    extra = remaining_ids - before_ids
+    left = remaining_ids & created_ids
+    others = remaining_ids - before_ids - created_ids
     missing = before_ids - remaining_ids
+    if others:
+        print(
+            "\n[rstudio-local] note: left %d new session(s) alone that this run "
+            "did not create: %s" % (len(others), others)
+        )
     if missing:
         print(
             "\n[rstudio-local] note: %d pre-existing session(s) are gone "
             "that this run did not remove (likely unrelated activity on "
             "this shared instance): %s" % (len(missing), missing)
         )
-    assert not extra, "cleanup left session(s) behind: %s" % extra
+    assert not left, "cleanup left session(s) behind: %s" % left
 
     return created_ids

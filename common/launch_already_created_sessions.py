@@ -5,15 +5,16 @@ and run an R script in all of them at once.
 The tabs stay open so callers can keep working in each session's IDE; close
 them with close_launched_sessions() when done. The sessions keep running.
 """
+import os
 import posixpath
 from collections import namedtuple
 
-from common.config import env
-from common.rstudio_console_commands import r_source_command, wait_for_console_ready
+from common.config import EVIDENCE_DIR, env
+from common.rstudio_console_commands import get_console_output, r_source_command, wait_for_console_ready
 from common.rstudio_session_helper import is_session_alive, open_existing_session
 from common.rstudio_workbenchjob import check_output_file
 from common.script_timings import new_run_record, submit_in_each, wait_for_console_runs
-from common.session_actions import create_folder, set_session_working_directory
+from common.session_actions import close_all_editor_files, recreate_session_folder, set_session_working_directory
 
 API_SESSION_NAME_PREFIX = "AUTO_API_SESSION_"
 API_SESSION_START = int(env("API_SESSION_START", "105"))
@@ -49,6 +50,7 @@ def launch_already_created_session(context, home_url, session_name, timeout_ms=O
         if not is_session_alive(page):
             raise RuntimeError("session %s did not show its IDE after opening" % session_name)
         ready_s = wait_for_console_ready(page, timeout_ms=CONSOLE_READY_TIMEOUT_MS)
+        close_all_editor_files(page, session_name)
     except Exception as exc:
         page.close()
         print("\n[rstudio-local] session %s could not be opened: %s" % (session_name, exc))
@@ -81,7 +83,8 @@ def run_script_in_launched_sessions(launched, script_path, working_dir=None, tim
     """In each session from launch_already_created_sessions(), setwd to
     `working_dir` (default RSTUDIO_WORKING_DIR; skipped if neither is set),
     or with per_session_dir to its own `working_dir`/<session name> folder
-    (created if missing). Then source `script_path` in every console and
+    (emptied first: data left there by an earlier run is deleted, see
+    recreate_session_folder()). Then source `script_path` in every console and
     wait for all runs together, so the scripts run concurrently.
 
     With `output_path` (relative paths resolve against the working
@@ -108,7 +111,7 @@ def run_script_in_launched_sessions(launched, script_path, working_dir=None, tim
         session_dir = posixpath.join(working_dir, session.session_name) if per_session_dir else None
         try:
             if session_dir:
-                create_folder(session.page, session_dir)
+                recreate_session_folder(session.page, working_dir, session.session_name)
             set_session_working_directory(session.page, path=session_dir or working_dir)
             ready.append((session.page, record, session_dir))
         except Exception as exc:
@@ -123,9 +126,26 @@ def run_script_in_launched_sessions(launched, script_path, working_dir=None, tim
             check_output_file(page, record, output_path, delete=delete_output, remove_dir=session_dir)
 
     wait_for_console_runs(
-        submit_in_each(ready, source_command), timeout_ms, poll_interval_ms, on_done=_on_done, on_poll=on_poll,
+        submit_in_each(ready, source_command), timeout_ms, poll_interval_ms, on_done=_on_done,
+        on_timeout=lambda page, record, _: report_console_timeout(page, record["session_name"]), on_poll=on_poll,
     )
     return runs
+
+
+def report_console_timeout(page, session_name, tail_lines=15):
+    """Print the end of a timed-out session's console and save a screenshot
+    of its tab to evidence/console_timeout_<session name>.png, to show
+    whether the command was never submitted, errored or is still running.
+    Errors are printed, not raised.
+    """
+    try:
+        tail = get_console_output(page).strip().splitlines()[-tail_lines:]
+        print("\n[rstudio-local] session %s timed out; console ends with:\n%s" % (session_name, "\n".join(tail)))
+        path = os.path.join(EVIDENCE_DIR, "console_timeout_%s.png" % session_name)
+        page.screenshot(path=path)
+        print("[rstudio-local] screenshot saved to %s" % path)
+    except Exception as exc:
+        print("\n[rstudio-local] session %s timed out; could not capture its console: %s" % (session_name, exc))
 
 
 def close_launched_sessions(launched):

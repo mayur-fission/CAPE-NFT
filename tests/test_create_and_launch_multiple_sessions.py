@@ -38,4 +38,4 @@ def test_multiple_new_sessions_reach_active_ide(page):
             % (SESSION_COUNT, format_timings(timings))
         )
     finally:
-        cleanup_and_verify_sessions(page, home_url, before_ids)
+        cleanup_and_verify_sessions(page, home_url, before_ids, session_names=session_names)

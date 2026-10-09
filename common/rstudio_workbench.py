@@ -5,6 +5,7 @@ Console commands live in rstudio_console_commands.py, text files in
 rstudio_text_operations.py, and session launch/quit in
 rstudio_session_helper.py.
 """
+import posixpath
 import time
 from collections import namedtuple
 
@@ -67,6 +68,47 @@ def create_folder(page, path, timeout_ms=10000):
     """
     r_expr = 'format(dir.create(%s, recursive=TRUE))' % r_string(path)
     return read_console_value(page, r_expr, timeout_ms) == "TRUE"
+
+
+def close_all_editor_files(page, session_name, timeout_ms=30000):
+    """Close every file open in the session's editor without saving.
+    A session reopens the files left open by earlier runs (e.g. a Workbench
+    job script), which can get in the way of what the test opens next.
+    Errors are printed, not raised.
+    """
+    # documentCloseAll() only exists in newer RStudio versions; older ones
+    # run the IDE's File > Close All command instead.
+    r_expr = (
+        "{if (exists('.rs.api.documentCloseAll')) {.rs.api.documentCloseAll(save = FALSE); 'documentCloseAll'} "
+        "else if (exists('.rs.api.executeCommand')) {.rs.api.executeCommand('closeAllSourceDocs', quiet = TRUE); "
+        "'closeAllSourceDocs'} else 'none'}"
+    )
+    try:
+        method = read_console_value(page, r_expr, timeout_ms)
+        if method == "none":
+            print("\n[rstudio-local] session %s: this RStudio cannot close editor files from the console"
+                  % session_name)
+            return
+        page.wait_for_timeout(1500)
+        print("\n[rstudio-local] session %s: closed the files open in the editor (%s)" % (session_name, method))
+    except Exception as exc:
+        print("\n[rstudio-local] session %s: could not close the editor files: %s" % (session_name, exc))
+
+
+def recreate_session_folder(page, working_dir, session_name, timeout_ms=30000):
+    """Delete `working_dir`/`session_name` with everything in it (data left
+    by an earlier run of the session) and create it again, empty. Returns
+    the folder path; raises RuntimeError if it could not be recreated.
+    """
+    if not working_dir or not session_name or "/" in session_name or session_name in (".", ".."):
+        raise ValueError("refusing to recreate folder %r in %r" % (session_name, working_dir))
+    path = posixpath.join(working_dir, session_name)
+    r_path = r_string(path)
+    r_expr = "{unlink(%s, recursive=TRUE); format(dir.create(%s, recursive=TRUE))}" % (r_path, r_path)
+    if read_console_value(page, r_expr, timeout_ms) != "TRUE":
+        raise RuntimeError("could not remove and recreate %s" % path)
+    print("\n[rstudio-local] session %s: removed earlier test data, %s is empty" % (session_name, path))
+    return path
 
 
 

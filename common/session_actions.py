@@ -21,7 +21,12 @@ from common.rstudio_session_helper import (
     launch_new_session,
 )
 from common.rstudio_session_helper import open_existing_session  # noqa: F401 - re-exported
-from common.rstudio_workbench import create_folder, delete_file  # noqa: F401 - re-exported
+from common.rstudio_workbench import (  # noqa: F401 - re-exported
+    close_all_editor_files,
+    create_folder,
+    delete_file,
+    recreate_session_folder,
+)
 from common.rstudio_workbench import login as _login
 from common.rstudio_workbench import set_working_directory as _set_working_directory
 from common.session_retry import retry

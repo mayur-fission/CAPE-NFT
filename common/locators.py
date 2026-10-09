@@ -14,6 +14,8 @@ SESSION_STATUS_CELL_SELECTOR = "[data-testid^='cell-status-']"
 SESSION_STATUS_CELL_BY_ID = "[data-testid='%s']"
 # Confirmation dialogs (quit, remove, save, Workbench job)
 DIALOG_SELECTOR = "[role='dialog'], [role='alertdialog']"
+# The IDE's modal overlay: while visible it intercepts every click
+MODAL_GLASS_SELECTOR = ".gwt-PopupPanelGlass"
 
 # --- New Session dialog (launch_new_session()) ------------------------------
 SESSION_NAME_FIELD_ROLE = "textbox"
@@ -23,6 +25,8 @@ LAUNCH_BUTTON = "Launch"
 # --- Session IDE (console automation) --------------------------------------
 CONSOLE_TAB_TEXT = "Console"
 CONSOLE_INPUT_SELECTOR = "#rstudio_console_input .ace_text-input"
+# What is currently typed in the console input (not yet submitted)
+CONSOLE_INPUT_TEXT_SELECTOR = "#rstudio_console_input .ace_content"
 CONSOLE_OUTPUT_SELECTOR = "#rstudio_console_output"
 
 # --- Source editor pane (create_text_file()) --------------------------------

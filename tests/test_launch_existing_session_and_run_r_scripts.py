@@ -25,7 +25,7 @@ TIMINGS_LABEL = "existing_api_sessions"
 
 # Sessions recorded in testdata/session_ids_U<CSV_SESSIONS_USER>.csv
 CSV_SESSIONS_USER = int(env("CSV_SESSIONS_USER", "1"))
-CSV_SCRIPT_PATH = env("CSV_SESSIONS_SCRIPT", "/home/posit/generate_10kb_csv.R")
+CSV_SCRIPT_PATH = env("CSV_SESSIONS_SCRIPT", "/home/posit/batch_mayur/generate_10kb_csv.R")
 CSV_OUTPUT_DIR = env("CSV_SESSIONS_OUTPUT_DIR", "/home/posit")
 CSV_OUTPUT_FILE_NAME = "generated_data_10kb.csv"
 CSV_TIMINGS_LABEL = "csv_api_sessions_U%d" % CSV_SESSIONS_USER

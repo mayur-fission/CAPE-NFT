@@ -40,7 +40,8 @@ rather than starting from scratch.
 
 The R scripts the tests source (`sample_10mb.R`, `sample_100mb.R`,
 `generate_10kb_csv.R`, `sample_run_sleep.R`) must already exist on the
-server, by default in `/home/posit`.
+server, by default in `/home/posit` (`generate_10kb_csv.R` in
+`/home/posit/batch_mayur`).
 
 ## Running
 
