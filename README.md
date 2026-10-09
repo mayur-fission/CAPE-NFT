@@ -48,7 +48,7 @@ server, by default in `/home/posit` (`generate_10kb_csv.R` in
 The Workbench server must be running. Tests create real sessions on it.
 
 ```bash
-pytest tests/test_us_167.py -v                 # one file
+pytest tests/test_167.py -v                    # one file
 pytest -k concurrent -v                        # by name
 pytest tests/test_rstudio_sessions.py --headed # watch the browser
 pytest --collect-only -q                       # list tests, touches nothing
@@ -72,7 +72,7 @@ Each test's docstring has a `Flow:` line (e.g. `login -> launch new session
 | `test_rstudio_run_r_script_perf.py` | R script time in new sessions, one or many users |
 | `test_rstudio_source_script_perf.py` | R script time in existing sessions |
 | `test_create_sessions_run_r_close_browser.py` | Scripts and Workbench jobs keep running after the tab closes |
-| `test_run_high_throughput_job.py`, `test_us_167.py`, `test_us_168.py` | High-throughput script, timed |
+| `test_run_high_throughput_job.py`, `test_167.py`, `test_168.py` | High-throughput script, timed |
 | `test_launch_sessions_api_user1.py` | Create / relaunch sessions through the API only |
 | `test_create_session_through_api_and_run_script*.py` | API-created sessions driven in the browser, incl. mixed workloads |
 | `test_launch_existing_session_and_run_r_scripts.py` | Reuse existing API sessions |
