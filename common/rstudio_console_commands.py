@@ -14,6 +14,9 @@ from common import locators
 _POLL_INTERVAL_MS = 200
 
 _marker_seq = itertools.count()
+# Ends every value read_console_value() prints, so a half-printed line is
+# not taken for the value.
+_VALUE_END = "@@AUTO_PERF_END@@"
 
 
 def _unique_marker(kind):
@@ -80,11 +83,21 @@ def read_console_value(page, r_expr, timeout_ms=10000):
 
     `r_expr` must produce one value cat() can print. Raises RuntimeError if
     nothing is printed within timeout_ms (including when `r_expr` errors).
+
+    The value is printed as one string ending in _VALUE_END, and only a
+    line that has reached that end counts: cat() writes its pieces
+    separately, and a busy console can show "<marker>=" before the value,
+    which would otherwise be read as an empty value.
     """
     marker = _unique_marker("VAL")
-    _type_command(page, "cat(%s, '=', %s, '\\n', sep='')" % (_r_split_literal(marker), r_expr), marker=marker)
+    _type_command(
+        page,
+        "cat(paste0(%s, '=', paste(%s, collapse=''), '%s'), '\\n', sep='')"
+        % (_r_split_literal(marker), r_expr, _VALUE_END),
+        marker=marker,
+    )
 
-    pattern = re.compile(re.escape(marker) + r"=(.*)")
+    pattern = re.compile(re.escape(marker) + r"=(.*?)" + re.escape(_VALUE_END))
     console = page.locator(locators.CONSOLE_OUTPUT_SELECTOR)
     deadline = time.time() + timeout_ms / 1000.0
     while time.time() < deadline:

@@ -207,10 +207,22 @@ def session_row_ids_with_prefix(page, prefixes):
     return {row_id for row_id, words in _row_words(page).items() if any(w.startswith(prefixes) for w in words)}
 
 
+def session_status_counts(page):
+    """{status: number of rows} for the session list (e.g. {"Active": 3,
+    "Suspended": 1}). Read in one atomic call like row_ids(), since the list
+    updates live. `page` must show the session list."""
+    statuses = page.eval_on_selector_all(
+        locators.SESSION_STATUS_CELL_SELECTOR, "els => els.map(el => el.innerText.trim())"
+    )
+    counts = {}
+    for status in statuses:
+        counts[status] = counts.get(status, 0) + 1
+    return counts
+
+
 def get_active_session_count(page):
     """Number of rows with status Active. `page` must show the session list."""
-    cells = page.locator(locators.SESSION_STATUS_CELL_SELECTOR)
-    return sum(1 for i in range(cells.count()) if "Active" in cells.nth(i).inner_text())
+    return session_status_counts(page).get("Active", 0)
 
 
 def _click_and_confirm(page, click_action, confirm_button_name, timeout_ms=5000, poll_interval_ms=200):
