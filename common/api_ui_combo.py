@@ -15,13 +15,13 @@ from playwright.sync_api import sync_playwright
 
 from common import locators
 from common.api_helper import launch_sessions_from_csv, read_session_names, stop_session, write_session_ids
-from common.config import EVIDENCE_DIR
 from common.launch_already_created_sessions import (
     CONSOLE_READY_TIMEOUT_MS,
     LaunchedSession,
     close_launched_sessions,
     launch_already_created_sessions,
     run_script_in_launched_sessions,
+    save_screenshot,
 )
 from common.rstudio_console_commands import (
     is_console_command_done,
@@ -256,6 +256,7 @@ def create_sessions_in_ui_across_browsers(contexts, user, csv_paths, prefixes=("
                     "\n[rstudio-local] session %s launched in %.2fs, console ready %.2fs later"
                     % (name, launch.elapsed_s, ready_s)
                 )
+                save_screenshot(page, "session_created_%s.png" % name)
                 launched.append(LaunchedSession(session_name=name, page=page, launch=launch, error=None))
                 names_by_csv[csv_path].append(name)
     return home_url, before_ids, names_by_csv, launched, failed
@@ -391,7 +392,7 @@ def start_workbench_jobs(sessions, script_path, output_dir):
             print("\n[rstudio-local] session %s: started Workbench job %s" % (session.session_name, job_name))
         except Exception as exc:
             record["status"] = "job start failed: %s" % exc
-            _save_screenshot(session.page, "job_start_failed_%s.png" % session.session_name)
+            save_screenshot(session.page, "job_start_failed_%s.png" % session.session_name)
     return records, started
 
 
@@ -412,9 +413,10 @@ def start_background_jobs(sessions, script_path, output_dir):
             started.append((session.page, job_id, record))
             print("\n[rstudio-local] session %s: started background job %s (%s)"
                   % (session.session_name, posixpath.basename(script_path), job_id))
+            save_screenshot(session.page, "background_job_started_%s.png" % session.session_name)
         except Exception as exc:
             record["status"] = "background job start failed: %s" % exc
-            _save_screenshot(session.page, "background_job_start_failed_%s.png" % session.session_name)
+            save_screenshot(session.page, "background_job_start_failed_%s.png" % session.session_name)
     return records, started
 
 
@@ -436,17 +438,7 @@ def check_background_jobs(started):
             "\n[rstudio-local] session %s: background job %s is %r after %.2fs"
             % (record["session_name"], job_id, state, record["ended"] - record["started"])
         )
-
-
-def _save_screenshot(page, file_name):
-    """Save a screenshot of `page` to evidence/`file_name`. Errors are
-    printed, not raised."""
-    path = os.path.join(EVIDENCE_DIR, file_name)
-    try:
-        page.screenshot(path=path)
-        print("\n[rstudio-local] screenshot saved to %s" % path)
-    except Exception as exc:
-        print("\n[rstudio-local] could not save screenshot %s: %s" % (path, exc))
+        save_screenshot(page, "background_job_status_%s.png" % record["session_name"])
 
 
 def check_workbench_jobs(started):
@@ -499,6 +491,9 @@ class ListFilesLoop:
         # session -> (marker, record) while a call is in flight, else None
         self.in_flight = {session: None for session in sessions}
         self.next_due = {session: time.time() for session in sessions}
+        # Sessions whose first command / first answer has been screenshotted
+        self.captured = set()
+        self.output_captured = set()
 
     def tick(self):
         now = time.time()
@@ -511,6 +506,10 @@ class ListFilesLoop:
                 try:
                     marker, record["started"] = submit_console_command(session.page, self.command)
                     self.in_flight[session] = (marker, record)
+                    if session not in self.captured:
+                        # Only the first call: the command repeats every interval_s.
+                        self.captured.add(session)
+                        save_screenshot(session.page, "console_command_%s.png" % session.session_name)
                 except Exception as exc:
                     record["status"] = "list.files failed: %s" % exc
                     self.next_due[session] = now + self.interval_s
@@ -528,6 +527,9 @@ class ListFilesLoop:
                     "\n[rstudio-local] session %s: %s answered in %.2fs"
                     % (session.session_name, self.command, record["ended"] - record["started"])
                 )
+                if session not in self.output_captured:
+                    self.output_captured.add(session)
+                    save_screenshot(session.page, "console_output_%s.png" % session.session_name)
         if done:
             self.in_flight[session] = None
             self.next_due[session] = time.time() + self.interval_s

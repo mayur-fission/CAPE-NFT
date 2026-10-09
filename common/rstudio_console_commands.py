@@ -139,6 +139,18 @@ def get_file_size(page, path, timeout_ms=10000):
     return None if value == "NA" else int(value)
 
 
+def read_text_file(page, path, timeout_ms=30000):
+    """Contents of the text file `path` (read by printing it in the console),
+    or None if it doesn't exist. Meant for small files: the console only
+    keeps its last lines.
+    """
+    r_statements = "local({p <- %s; if (file.exists(p)) cat(readLines(p, warn=FALSE), sep='\\n') " \
+                   "else cat('%s')})" % (r_string(path), _MISSING_FILE)
+    body = _read_console_block(page, r_statements, timeout_ms, "contents of %r" % path)
+    return None if body.strip() == _MISSING_FILE else body
+
+
+_MISSING_FILE = "@@AUTO_PERF_MISSING@@"
 _FILE_LIST_SEPARATOR = "@@AUTO_PERF_SEP@@"
 
 

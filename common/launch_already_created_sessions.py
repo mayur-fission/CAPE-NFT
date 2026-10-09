@@ -10,7 +10,12 @@ import posixpath
 from collections import namedtuple
 
 from common.config import EVIDENCE_DIR, env
-from common.rstudio_console_commands import get_console_output, r_source_command, wait_for_console_ready
+from common.rstudio_console_commands import (
+    get_console_output,
+    r_source_command,
+    read_text_file,
+    wait_for_console_ready,
+)
 from common.rstudio_session_helper import is_session_alive, open_existing_session
 from common.rstudio_workbenchjob import check_output_file
 from common.script_timings import new_run_record, submit_in_each, wait_for_console_runs
@@ -122,14 +127,48 @@ def run_script_in_launched_sessions(launched, script_path, working_dir=None, tim
             "\n[rstudio-local] session %s: %s took %.2fs"
             % (record["session_name"], source_command, record["ended"] - record["started"])
         )
+        save_screenshot(page, "console_output_%s.png" % record["session_name"])
         if output_path:
+            save_output_file(page, record["session_name"], output_path)
             check_output_file(page, record, output_path, delete=delete_output, remove_dir=session_dir)
 
+    pending = submit_in_each(ready, source_command)
+    for page, _, record, _ in pending:
+        save_screenshot(page, "console_command_%s.png" % record["session_name"])
     wait_for_console_runs(
-        submit_in_each(ready, source_command), timeout_ms, poll_interval_ms, on_done=_on_done,
+        pending, timeout_ms, poll_interval_ms, on_done=_on_done,
         on_timeout=lambda page, record, _: report_console_timeout(page, record["session_name"]), on_poll=on_poll,
     )
     return runs
+
+
+def save_screenshot(page, file_name):
+    """Save a screenshot of `page` to evidence/`file_name`. Errors are
+    printed, not raised."""
+    path = os.path.join(EVIDENCE_DIR, file_name)
+    try:
+        page.screenshot(path=path)
+        print("\n[rstudio-local] screenshot saved to %s" % path)
+    except Exception as exc:
+        print("\n[rstudio-local] could not save screenshot %s: %s" % (path, exc))
+
+
+def save_output_file(page, session_name, path):
+    """Copy the text file `path` (e.g. a script's CSV output) from the
+    session to evidence/output_<session name>_<file name>. Errors are
+    printed, not raised."""
+    local_path = os.path.join(EVIDENCE_DIR, "output_%s_%s" % (session_name, posixpath.basename(path)))
+    try:
+        content = read_text_file(page, path)
+        if content is None:
+            print("\n[rstudio-local] session %s: %s not found, nothing to save" % (session_name, path))
+            return
+        os.makedirs(EVIDENCE_DIR, exist_ok=True)
+        with open(local_path, "w", encoding="utf-8", newline="") as f:
+            f.write(content.replace("\r\n", "\n").rstrip("\n") + "\n")
+        print("\n[rstudio-local] session %s: output saved to %s" % (session_name, local_path))
+    except Exception as exc:
+        print("\n[rstudio-local] session %s: could not save %s: %s" % (session_name, path, exc))
 
 
 def report_console_timeout(page, session_name, tail_lines=15):
