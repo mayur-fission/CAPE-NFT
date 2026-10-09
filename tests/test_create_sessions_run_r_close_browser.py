@@ -1,6 +1,7 @@
 """Start a long-running R script in RSTUDIO_SESSION_COUNT new sessions (each in
 its own tab), close every tab straight away and check the sessions survive
-RSTUDIO_WORKBENCH_JOB_TEST_DURATION_SECONDS on their own. Every session
+CLOSE_BROWSER_WAIT_S (else RSTUDIO_WORKBENCH_JOB_TEST_DURATION_SECONDS)
+seconds on their own. Every session
 created is force-quit afterwards.
 
 The script (default /home/posit/sample_run_sleep.R) must already exist on the
@@ -19,7 +20,12 @@ pytestmark = pytest.mark.rstudio_local
 
 SCRIPT_PATH = env("RSTUDIO_WORKBENCH_JOB_SCRIPT", DEFAULT_WORKBENCH_JOB_SCRIPT)
 SESSION_COUNT = int(env("RSTUDIO_SESSION_COUNT", required=True))
-TEST_DURATION_SECONDS = float(env("RSTUDIO_WORKBENCH_JOB_TEST_DURATION_SECONDS", "300"))
+# CLOSE_BROWSER_WAIT_S (the Jenkins field) wins when set; it has its own
+# name because .env, which already sets RSTUDIO_WORKBENCH_JOB_TEST_DURATION_SECONDS,
+# overrides the environment.
+TEST_DURATION_SECONDS = float(
+    env("CLOSE_BROWSER_WAIT_S") or env("RSTUDIO_WORKBENCH_JOB_TEST_DURATION_SECONDS", "300")
+)
 
 
 @pytest.mark.skip()

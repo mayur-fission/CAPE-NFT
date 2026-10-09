@@ -74,6 +74,9 @@ jobParams << string(name: 'PARALLEL_LOGIN_GAP_S', defaultValue: '30',
                  '(Workbench fails sign-ins that happen at the same time)')
 jobParams << string(name: 'GROUP_TEST_DURATION_S', defaultValue: '180',
     description: 'Group tests (API, UI and multi-browser): how long the workloads run, in seconds')
+jobParams << string(name: 'CLOSE_BROWSER_WAIT_S', defaultValue: '',
+    description: 'test_create_sessions_run_r_close_browser: seconds the sessions are left running with their tabs closed ' +
+                 'before they are quit. Blank = RSTUDIO_WORKBENCH_JOB_TEST_DURATION_SECONDS from .env (300 if unset)')
 jobParams << string(name: 'ACTIVE_SESSIONS_MONITOR_S', defaultValue: '300',
     description: 'test_active_session_count without RUN_IN_PARALLEL (or ticked on its own): how long to keep counting, in seconds. ' +
                  'With RUN_IN_PARALLEL it counts until the other tests finish instead')
@@ -125,6 +128,9 @@ pipeline {
                     // A field added since the last build has no value yet: skip it, its default applies.
                     if (params.ACTIVE_SESSIONS_USERS != null && !(params.ACTIVE_SESSIONS_USERS.trim() ==~ /\d+(\s*,\s*\d+)*/)) {
                         error("ACTIVE_SESSIONS_USERS must be user numbers separated by commas (e.g. 1,2), got '${params.ACTIVE_SESSIONS_USERS}'")
+                    }
+                    if (params.CLOSE_BROWSER_WAIT_S?.trim() && !(params.CLOSE_BROWSER_WAIT_S.trim() ==~ /\d+/)) {
+                        error("CLOSE_BROWSER_WAIT_S must be a whole number of seconds or blank, got '${params.CLOSE_BROWSER_WAIT_S}'")
                     }
                     if (!selected) {
                         error('No tests selected. Tick at least one test checkbox (or RUN_ALL) and build again.')
@@ -199,6 +205,7 @@ pipeline {
                     "GROUP_SESSIONS_UI_BROWSERS=${params.UI_BROWSERS.trim()}",
                     "GROUP_SESSIONS_UI_BROWSER_STAGGER_S=${params.UI_BROWSER_STAGGER_S.trim()}",
                     "GROUP_SESSIONS_TEST_DURATION_S=${params.GROUP_TEST_DURATION_S.trim()}",
+                    "CLOSE_BROWSER_WAIT_S=${(params.CLOSE_BROWSER_WAIT_S ?: '').trim()}",
                     "ACTIVE_SESSIONS_MONITOR_S=${(params.ACTIVE_SESSIONS_MONITOR_S ?: '300').trim()}",
                     "ACTIVE_SESSIONS_USERS=${(params.ACTIVE_SESSIONS_USERS ?: '1').trim()}",
                 ]) {
