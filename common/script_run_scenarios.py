@@ -10,7 +10,7 @@ Run records use the common.script_timings format ("session_name",
 import posixpath
 import time
 
-from common.helper_function import login_and_snapshot
+from common.helper_function import login_and_plan_session_names, login_and_snapshot
 from common.launch_already_created_sessions import (
     close_launched_sessions,
     launch_already_created_sessions,
@@ -23,6 +23,7 @@ from common.rstudio_workbenchjob import (
     reopen_sessions_and_stop_jobs,
 )
 from common.script_timings import failed_runs, script_timings_csv_path, write_script_timings_csv
+from common.rstudio_session_helper import AUTO_PERF_NAME_PREFIX
 from common.session_actions import login_to_posit_workbench
 from common.session_cleanup import cleanup_and_verify_sessions
 
@@ -37,8 +38,10 @@ def print_script_runs_summary(label, runs, script_path, started):
 
 
 def run_script_in_new_sessions_scenario(context, session_count, label, script_path, working_dir,
-                                        output_file_name, timeout_ms, per_session_dir=False):
-    """Launch `session_count` new sessions, each in its own tab, setwd to
+                                        output_file_name, timeout_ms, per_session_dir=False,
+                                        name_prefix=AUTO_PERF_NAME_PREFIX):
+    """Launch `session_count` new sessions named <name_prefix><N> (the next
+    free numbers, reserved up front), each in its own tab, setwd to
     `working_dir` (`working_dir`/<session name> with per_session_dir) and
     source `script_path` in every console at once. A run is "ok" only if it
     finishes within `timeout_ms` and leaves `output_file_name` behind; the
@@ -46,11 +49,14 @@ def run_script_in_new_sessions_scenario(context, session_count, label, script_pa
     any per-session folder.
 
     Writes the timings CSV and quits every session created, even on failure.
-    A cleanup error is raised only if nothing else failed, so it never hides
-    the original problem. Returns failed_runs() of the runs.
+    Cleanup quits only the sessions with those names, so tests that run at
+    the same time as the same user (each with its own name_prefix) leave
+    each other's sessions alone. A cleanup error is raised only if nothing
+    else failed, so it never hides the original problem. Returns
+    failed_runs() of the runs.
     """
     home_page = context.new_page()
-    home_url, before_ids = login_and_snapshot(home_page)
+    home_url, before_ids, session_names = login_and_plan_session_names(home_page, name_prefix, session_count)
     runs, failures = [], None
 
     started = time.time()
@@ -59,13 +65,14 @@ def run_script_in_new_sessions_scenario(context, session_count, label, script_pa
             context, home_url, session_count, script_path,
             working_dir=working_dir, timeout_ms=timeout_ms,
             output_path=output_file_name, per_session_dir=per_session_dir, delete_output=True,
+            session_names=session_names,
         )
         print_script_runs_summary(label, runs, script_path, started)
         failures = failed_runs(runs)
     finally:
         write_script_timings_csv(script_timings_csv_path(label), runs)
         try:
-            cleanup_and_verify_sessions(home_page, home_url, before_ids)
+            cleanup_and_verify_sessions(home_page, home_url, before_ids, session_names=session_names)
         except Exception as cleanup_exc:
             if failures == []:
                 raise

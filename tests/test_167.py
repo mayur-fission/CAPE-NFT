@@ -15,6 +15,9 @@ HTP_SCRIPT_PATH = env("HIGH_THROUGHPUT_JOB_SCRIPT", DEFAULT_WORKBENCH_JOB_SCRIPT
 TEST_DURATION_SECONDS = float(env("HIGH_THROUGHPUT_JOB_TEST_DURATION_SECONDS", "180"))
 OUTPUT_DIR = env("HIGH_THROUGHPUT_JOB_OUTPUT_DIR", "/home/posit")
 OUTPUT_FILE_NAME = "generated_data_10kb.csv"
+# Own name prefix, so this test can run at the same time as the other
+# high-throughput tests (see run_script_in_new_sessions_scenario()).
+SESSION_NAME_PREFIX = "167_AUTO_SESSION_"
 
 
 def test_high_throughput_script_single_session_timed_167(context):
@@ -25,6 +28,6 @@ def test_high_throughput_script_single_session_timed_167(context):
     """
     failures = run_script_in_new_sessions_scenario(
         context, 1, "high_throughput_single_session", HTP_SCRIPT_PATH,
-        OUTPUT_DIR, OUTPUT_FILE_NAME, int(TEST_DURATION_SECONDS * 1000),
+        OUTPUT_DIR, OUTPUT_FILE_NAME, int(TEST_DURATION_SECONDS * 1000), name_prefix=SESSION_NAME_PREFIX,
     )
     assert not failures, "script runs that did not finish: %s" % failures

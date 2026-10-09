@@ -17,6 +17,9 @@ SESSION_COUNT = int(env("RSTUDIO_SESSION_COUNT", required=True))
 TEST_DURATION_SECONDS = float(env("HIGH_THROUGHPUT_JOB_TEST_DURATION_SECONDS", "180"))
 OUTPUT_DIR = env("HIGH_THROUGHPUT_JOB_OUTPUT_DIR", "/home/posit")
 OUTPUT_FILE_NAME = "generated_data_10kb.csv"
+# Own name prefix, so this test can run at the same time as the other
+# high-throughput tests (see run_script_in_new_sessions_scenario()).
+SESSION_NAME_PREFIX = "168_AUTO_SESSION_"
 
 
 def test_high_throughput_script_concurrent_session_timed_168(context):
@@ -29,5 +32,6 @@ def test_high_throughput_script_concurrent_session_timed_168(context):
     failures = run_script_in_new_sessions_scenario(
         context, SESSION_COUNT, "high_throughput_multiple_sessions", HTP_SCRIPT_PATH,
         OUTPUT_DIR, OUTPUT_FILE_NAME, int(TEST_DURATION_SECONDS * 1000), per_session_dir=True,
+        name_prefix=SESSION_NAME_PREFIX,
     )
     assert not failures, "script runs that did not finish: %s" % failures

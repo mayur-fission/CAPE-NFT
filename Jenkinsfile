@@ -1,7 +1,9 @@
 // CAPE NFT - Posit Workbench performance tests.
 //
 // "Build with Parameters" shows one checkbox per test file; tick any number
-// and they run together in a single pytest run. RUN_ALL ignores the boxes.
+// and they run together in a single pytest run, one file after another.
+// RUN_IN_PARALLEL instead runs each ticked file in its own pytest at the same
+// time (Jenkins parallel branches). RUN_ALL ignores the boxes.
 //
 // One-time Jenkins setup:
 //   - Pipeline job -> "Pipeline script from SCM" -> this repo, script path "Jenkinsfile".
@@ -48,6 +50,10 @@ TEST_NAMES = new ArrayList(TEST_FILES.keySet())
 def jobParams = [
     choice(name: 'ENVIRONMENT', choices: ['Dev', 'QA'], description: 'Target environment - picks which .env credential the tests use'),
     booleanParam(name: 'RUN_ALL', defaultValue: false, description: 'Run every test file (ignores the checkboxes below)'),
+    booleanParam(name: 'RUN_IN_PARALLEL', defaultValue: false,
+        description: 'Run the selected test files at the same time, each in its own pytest (one parallel branch per file). ' +
+                     'Only for tests that keep to their own sessions, e.g. test_167 + test_168; tests that quit every ' +
+                     'automation session or reuse the same session names will interfere with each other.'),
 ]
 for (name in TEST_NAMES) {
     jobParams << booleanParam(name: name, defaultValue: false, description: TEST_FILES[name])
@@ -112,9 +118,12 @@ pipeline {
                         }
                     }
                     env.TEST_PATHS = selected.collect { "tests/${it}.py" }.join(' ')
+                    env.SELECTED_TESTS = selected.join(',')
                     currentBuild.description = "${params.ENVIRONMENT}: " +
                         (selected.size() == TEST_NAMES.size() ? 'all tests' : selected.join(', '))
-                    echo "Running ${selected.size()} test file(s) on ${params.ENVIRONMENT}:\n  " + selected.join('\n  ')
+                    echo "Running ${selected.size()} test file(s) on ${params.ENVIRONMENT}" +
+                         (params.RUN_IN_PARALLEL && selected.size() > 1 ? ' in parallel' : '') +
+                         ":\n  " + selected.join('\n  ')
                 }
             }
         }
@@ -176,18 +185,52 @@ pipeline {
                             } else {
                                 bat 'copy /Y "%ENV_FILE%" .env'
                             }
+                            // The workspace is reused between builds: drop the last build's
+                            // results so the JUnit/Allure reports only show this one.
+                            if (isUnix()) {
+                                sh 'rm -rf evidence/junit*.xml evidence/allure-results'
+                            } else {
+                                bat '''
+                                    if exist evidence\\junit*.xml del /F /Q evidence\\junit*.xml
+                                    if exist evidence\\allure-results rmdir /S /Q evidence\\allure-results
+                                    exit /b 0
+                                '''
+                            }
 
                             def kArg = params.PYTEST_K?.trim() ? "-k \"${params.PYTEST_K.trim()}\"" : ''
-                            def args = "${env.TEST_PATHS} -v ${kArg} ${params.EXTRA_PYTEST_ARGS ?: ''} " +
-                                       '--junitxml=evidence/junit.xml --alluredir=evidence/allure-results'
+                            def commonArgs = "-v ${kArg} ${params.EXTRA_PYTEST_ARGS ?: ''} --alluredir=evidence/allure-results"
                             def py = isUnix() ? '.venv/bin/python' : '.venv\\Scripts\\python.exe'
-                            def status = runStatus("${py} -m pytest ${args}")
+                            def selected = env.SELECTED_TESTS.split(',') as List
 
-                            // pytest exit codes: 0 passed, 1 some tests failed, 2+ run broke.
-                            if (status == 1) {
-                                unstable('Some tests failed')
-                            } else if (status > 1) {
-                                error("pytest exited with code ${status}")
+                            // pytest exit code per run: 0 passed, 1 some tests failed, 2+ run broke.
+                            def statuses = [:]
+                            if (params.RUN_IN_PARALLEL && selected.size() > 1) {
+                                // One pytest per file, all at once; each writes its own JUnit
+                                // file, and Allure results (uniquely named) share one folder.
+                                def branches = [:]
+                                for (name in selected) {
+                                    def testName = name   // the closure must capture this iteration's value
+                                    branches[testName] = {
+                                        statuses[testName] = runStatus(
+                                            "${py} -m pytest tests/${testName}.py ${commonArgs} --junitxml=evidence/junit-${testName}.xml")
+                                    }
+                                }
+                                parallel branches
+                            } else {
+                                statuses['pytest'] = runStatus("${py} -m pytest ${env.TEST_PATHS} ${commonArgs} --junitxml=evidence/junit.xml")
+                            }
+
+                            // 5 = no tests collected: in parallel, a PYTEST_K filter may
+                            // match nothing in some of the files.
+                            if (kArg && statuses.size() > 1) {
+                                statuses.findAll { it.value == 5 }.each { echo "${it.key}: no tests match PYTEST_K" }
+                                statuses = statuses.findAll { it.value != 5 }
+                            }
+                            def broken = statuses.findAll { it.value > 1 }
+                            if (broken) {
+                                error('pytest run broke: ' + broken.collect { "${it.key} exited with code ${it.value}" }.join(', '))
+                            } else if (statuses.any { it.value == 1 }) {
+                                unstable('Some tests failed: ' + statuses.findAll { it.value == 1 }.keySet().join(', '))
                             }
                         }
                     }
@@ -198,7 +241,7 @@ pipeline {
 
     post {
         always {
-            junit testResults: 'evidence/junit.xml', allowEmptyResults: true
+            junit testResults: 'evidence/junit*.xml', allowEmptyResults: true
             archiveArtifacts artifacts: 'evidence/**/*.csv, evidence/**/*.json, testdata/session_ids_U*.csv, test-results/**',
                              allowEmptyArchive: true
             script {

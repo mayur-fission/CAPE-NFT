@@ -389,8 +389,9 @@ def report_output_file(page, record, output_path):
 
 def launch_sessions_and_run_script(context, home_url, session_count, script_path=DEFAULT_WORKBENCH_JOB_SCRIPT,
                                    working_dir=None, timeout_ms=1800000, poll_interval_ms=500, output_path=None,
-                                   per_session_dir=False, delete_output=False):
-    """Launch `session_count` new sessions, each in its own tab, and setwd to
+                                   per_session_dir=False, delete_output=False, session_names=None):
+    """Launch `session_count` new sessions (named `session_names` when given,
+    else the next free AUTO_PERF_SESSION_<N>), each in its own tab, and setwd to
     `working_dir` (default RSTUDIO_WORKING_DIR; skipped if neither is set).
     With per_session_dir, each session instead gets its own
     `working_dir`/<session name> folder (emptied first: data left there by
@@ -424,10 +425,11 @@ def launch_sessions_and_run_script(context, home_url, session_count, script_path
         for i in range(session_count):
             tab = context.new_page()
             tabs.append(tab)
-            record = new_run_record("session %d" % (i + 1))
+            name = session_names[i] if session_names else None
+            record = new_run_record(name or "session %d" % (i + 1))
             runs.append(record)
             try:
-                launch = launch_new_session(tab, home_url)
+                launch = launch_new_session(tab, home_url, session_name=name)
                 record["session_name"] = launch.session_name
                 close_all_editor_files(tab, launch.session_name)
                 session_dir = posixpath.join(working_dir, launch.session_name) if per_session_dir else None
