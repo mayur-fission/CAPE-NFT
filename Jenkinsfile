@@ -80,6 +80,9 @@ def jobParams = [
 for (name in TEST_NAMES) {
     jobParams << booleanParam(name: name, defaultValue: false, description: TEST_FILES[name])
 }
+jobParams << string(name: 'SESSION_COUNT', defaultValue: '10',
+    description: 'RSTUDIO_SESSION_COUNT for the multi-session tests (e.g. test_168, test_create_sessions_run_r_close_browser): ' +
+                 'sessions each test launches. Overrides the value in .env. With USE_EC2_NODES this is per agent')
 jobParams << string(name: 'UI_BROWSERS', defaultValue: '2',
     description: 'Multi-browser test: number of browsers. Each opens one tab per session name in the group CSVs ' +
                  '(5 today), so 2 browsers = 10 sessions')
@@ -101,6 +104,9 @@ jobParams << string(name: 'PARALLEL_LOGIN_GAP_S', defaultValue: '30',
                  '(Workbench fails sign-ins that happen at the same time)')
 jobParams << string(name: 'GROUP_TEST_DURATION_S', defaultValue: '180',
     description: 'Group tests (API, UI and multi-browser): how long the workloads run, in seconds')
+jobParams << string(name: 'HIGH_THROUGHPUT_DURATION_S', defaultValue: '',
+    description: 'test_167 / test_168: seconds each high-throughput script run may take before it counts as failed. ' +
+                 'Blank = HIGH_THROUGHPUT_JOB_TEST_DURATION_SECONDS from .env (180 if unset)')
 jobParams << string(name: 'CLOSE_BROWSER_WAIT_S', defaultValue: '',
     description: 'test_create_sessions_run_r_close_browser: seconds the sessions are left running with their tabs closed ' +
                  'before they are quit. Blank = RSTUDIO_WORKBENCH_JOB_TEST_DURATION_SECONDS from .env (300 if unset)')
@@ -167,12 +173,22 @@ def setupPython() {
 // Copy the ENVIRONMENT's .env into the workspace (the tests load it from the
 // repo root, common/config.py) and drop the last build's results, since the
 // workspace is reused between builds. Call inside withCredentials(ENV_FILE).
+// SESSION_COUNT and HIGH_THROUGHPUT_DURATION_S are appended to .env rather than
+// passed with withEnv, because .env is loaded with override=True and
+// python-dotenv keeps the last value.
 def prepareWorkspace() {
+    def overrides = ["RSTUDIO_SESSION_COUNT=${(params.SESSION_COUNT ?: '10').trim()}"]
+    def htpDuration = (params.HIGH_THROUGHPUT_DURATION_S ?: '').trim()
+    if (htpDuration) {
+        overrides << "HIGH_THROUGHPUT_JOB_TEST_DURATION_SECONDS=${htpDuration}"
+    }
     if (isUnix()) {
         sh 'cp "$ENV_FILE" .env'
+        sh "printf '\\n%s\\n' ${overrides.collect { "'${it}'" }.join(' ')} >> .env"
         sh "rm -rf evidence/junit*.xml evidence/allure-results evidence/.login_slot.lock ${STOP_FILE} ${READY_FILE}"
     } else {
         bat 'copy /Y "%ENV_FILE%" .env'
+        bat "(echo.${overrides.collect { "& echo ${it}" }.join('')})>> .env"
         bat '''
             if exist evidence\\junit*.xml del /F /Q evidence\\junit*.xml
             if exist evidence\\.login_slot.lock del /F /Q evidence\\.login_slot.lock
@@ -232,15 +248,20 @@ pipeline {
                         }
                     }
                     env.RUN_NODE_LABELS = nodeLabels.join(',')
-                    ['UI_BROWSERS', 'UI_BROWSER_STAGGER_S', 'PARALLEL_LOGIN_GAP_S', 'GROUP_TEST_DURATION_S',
+                    def atLeastOne = ['UI_BROWSERS', 'SESSION_COUNT']
+                    ['UI_BROWSERS', 'SESSION_COUNT', 'UI_BROWSER_STAGGER_S', 'PARALLEL_LOGIN_GAP_S', 'GROUP_TEST_DURATION_S',
                      'ACTIVE_SESSIONS_MONITOR_S', 'NODE_START_OFFSET_S'].each { name ->
                         if (params[name] == null) {
                             return
                         }
                         def value = params[name]?.trim()
-                        if (!(value ==~ /\d+/) || (name == 'UI_BROWSERS' && value.toInteger() < 1)) {
-                            error("${name} must be a whole number${name == 'UI_BROWSERS' ? ' of at least 1' : ''}, got '${params[name]}'")
+                        if (!(value ==~ /\d+/) || (name in atLeastOne && value.toInteger() < 1)) {
+                            error("${name} must be a whole number${name in atLeastOne ? ' of at least 1' : ''}, got '${params[name]}'")
                         }
+                    }
+                    def htpDuration = (params.HIGH_THROUGHPUT_DURATION_S ?: '').trim()
+                    if (htpDuration && (!(htpDuration ==~ /\d+/) || htpDuration.toInteger() < 1)) {
+                        error("HIGH_THROUGHPUT_DURATION_S must be blank or a whole number of at least 1, got '${params.HIGH_THROUGHPUT_DURATION_S}'")
                     }
                     env.TEST_PATHS = selected.collect { "tests/${it}.py" }.join(' ')
                     env.SELECTED_TESTS = selected.join(',')

@@ -284,6 +284,99 @@ def quit_ui_created_sessions(context, home_url, before_ids, csv_paths, prefixes=
             page.close()
 
 
+def wait_until_epoch(start_at_epoch, who="this machine"):
+    """Sleep until `start_at_epoch` (Unix time, number or string), logging
+    the start time for `who`; no wait if it is blank or past."""
+    if not start_at_epoch:
+        return
+    start_at = float(start_at_epoch)
+    wait_s = start_at - time.time()
+    print("\n[rstudio-local] %s: starting at %s (in %.0fs)"
+          % (who, time.strftime("%H:%M:%S", time.localtime(start_at)), max(0.0, wait_s)))
+    if wait_s > 0:
+        time.sleep(wait_s)
+
+
+def run_group_workloads_across_browsers(browser_name, launch_args, context_args, user, group_csvs, prefixes,
+                                        label, stagger_s=0, attempts=3, launch_timeout_ms=180000,
+                                        retry_wait_s=15, **workload):
+    """run_group_workloads() in one browser per entry in `prefixes`, run by
+    run_in_parallel_browsers(). Each browser logs in as `user` and launches
+    every name in `group_csvs` ({"test"|"a"|"b"|"c": csv path}) with its
+    prefix in front. `workload` is run_group_workloads()'s arguments after
+    `label`.
+
+    Browsers wait for each other before the workloads (skipped everywhere
+    if any browser failed to launch) and before cleanup; each closes its
+    tabs and quits the sessions it created even on failure.
+
+    Returns (runs, errors): all run records, and "browser <prefix>: <error>"
+    per failed browser.
+    """
+    ready = threading.Barrier(len(prefixes))
+    done = threading.Barrier(len(prefixes))
+    launch_failed = set()
+
+    def _worker(context, prefix):
+        return _run_group_workloads_in_browser(
+            context, prefix, user, group_csvs, "%s %s" % (label, prefix), ready, done, launch_failed,
+            attempts, launch_timeout_ms, retry_wait_s, workload,
+        )
+
+    results = run_in_parallel_browsers(
+        browser_name, launch_args, context_args, prefixes, _worker, barriers=(ready, done), stagger_s=stagger_s,
+    )
+    runs, errors = [], []
+    for prefix, result, error in results:
+        if result is not None:
+            browser_runs, error = result
+            runs += browser_runs
+        if error is not None:
+            errors.append("browser %s: %s" % (prefix, error))
+    return runs, errors
+
+
+def _run_group_workloads_in_browser(context, prefix, user, group_csvs, label, ready, done, launch_failed,
+                                    attempts, launch_timeout_ms, retry_wait_s, workload):
+    """One browser's part of run_group_workloads_across_browsers(); a
+    browser whose launch fails adds its prefix to `launch_failed`. Returns
+    (runs, error): its run records and the error that failed it, else None."""
+    home_url = before_ids = None
+    launched, runs, groups, error = [], [], {}, None
+    try:
+        try:
+            home_url, before_ids, names_by_csv, launched, failed = create_sessions_in_ui_across_browsers(
+                [context], user, group_csvs.values(), prefixes=[prefix],
+                attempts=attempts, launch_timeout_ms=launch_timeout_ms, retry_wait_s=retry_wait_s,
+            )
+            assert not failed, "sessions that failed to launch: %s" % failed
+            empty = [path for path, names in names_by_csv.items() if not names]
+            assert not empty, "no session names found in %s" % empty
+            by_name = {s.session_name: s for s in launched}
+            groups = {g: [by_name[name] for name in names_by_csv[path]] for g, path in group_csvs.items()}
+        except Exception:
+            launch_failed.add(prefix)
+            raise
+        finally:
+            print("\n[rstudio-local] browser %s: sessions launched, waiting for the other browsers" % prefix)
+            ready.wait()
+        if launch_failed:
+            raise AssertionError("workloads skipped: launch failed in browser(s) %s" % sorted(launch_failed))
+        run_group_workloads(groups, runs, label, **workload)
+    except Exception as exc:
+        error = exc
+    finally:
+        try:
+            done.wait()
+        except threading.BrokenBarrierError:
+            pass
+        # Background jobs end when their sessions are quit below.
+        stop_jobs_and_close_tabs(launched)
+        if home_url is not None:
+            quit_ui_created_sessions(context, home_url, before_ids, group_csvs.values(), [prefix])
+    return runs, error
+
+
 def run_group_workloads(groups, runs, label, duration_s, script_path, output_dir, output_file_name,
                         job_script_path, list_files_interval_s=30, background_jobs=False):
     """Run each group's workload at once until `duration_s` from now and
