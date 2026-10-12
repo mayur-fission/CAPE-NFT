@@ -183,11 +183,13 @@ def prepareWorkspace() {
         overrides << "HIGH_THROUGHPUT_JOB_TEST_DURATION_SECONDS=${htpDuration}"
     }
     if (isUnix()) {
-        sh 'cp "$ENV_FILE" .env'
+        // Jenkins keeps secret files read-only and cp keeps that mode: make the
+        // copy writable, since the overrides below are appended to it.
+        sh 'rm -f .env && cp "$ENV_FILE" .env && chmod 600 .env'
         sh "printf '\\n%s\\n' ${overrides.collect { "'${it}'" }.join(' ')} >> .env"
         sh "rm -rf evidence/junit*.xml evidence/allure-results evidence/.login_slot.lock ${STOP_FILE} ${READY_FILE}"
     } else {
-        bat 'copy /Y "%ENV_FILE%" .env'
+        bat '(if exist .env del /F /Q .env) && copy /Y "%ENV_FILE%" .env && attrib -R .env'
         bat "(echo.${overrides.collect { "& echo ${it}" }.join('')})>> .env"
         bat '''
             if exist evidence\\junit*.xml del /F /Q evidence\\junit*.xml
