@@ -14,9 +14,16 @@ driven at the same time for TEST_DURATION_S:
         fail)
 - c:    nothing - the session is left idle
 
+Running on several machines at once (Jenkins USE_EC2_NODES) with the same
+user: each machine sets GROUP_SESSIONS_UI_NODE_PREFIX (N1_, N2_, ...) so its
+names (N1_B1_TEST_USER_1, ...) differ from the other machines' and it only
+quits its own, and GROUP_SESSIONS_UI_START_AT_EPOCH so the machines start at
+agreed times and their logins don't clash.
+
 Workload helpers are in common/api_ui_combo.py.
 """
 import threading
+import time
 
 import pytest
 
@@ -37,10 +44,16 @@ pytestmark = pytest.mark.rstudio_local
 CSV_SESSIONS_USER = int(env("CSV_SESSIONS_USER", "1"))
 BROWSER_COUNT = int(env("GROUP_SESSIONS_UI_BROWSERS", "2"))
 GROUP_CSVS = group_sessions_csv_paths(("test", "a", "b", "c"))
-NAME_PREFIXES = browser_name_prefixes(BROWSER_COUNT)
+# Put in front of every browser prefix when several machines run this test
+# as the same user, e.g. "N1_" -> N1_B1_, N1_B2_, ...
+NODE_PREFIX = env("GROUP_SESSIONS_UI_NODE_PREFIX", "")
+NAME_PREFIXES = [NODE_PREFIX + p for p in browser_name_prefixes(BROWSER_COUNT)]
+# Unix time to wait for before the first browser starts (blank = start now).
+START_AT_EPOCH = env("GROUP_SESSIONS_UI_START_AT_EPOCH") or None
 # Gap between starting one browser and the next, so their logins don't clash.
 BROWSER_STAGGER_S = int(env("GROUP_SESSIONS_UI_BROWSER_STAGGER_S", "30"))
-TIMINGS_LABEL = "new_ui_sessions_%d_browsers_U%d" % (BROWSER_COUNT, CSV_SESSIONS_USER)
+TIMINGS_LABEL = "new_ui_sessions_%d_browsers_U%d%s" % (BROWSER_COUNT, CSV_SESSIONS_USER,
+                                                        "_" + NODE_PREFIX.rstrip("_") if NODE_PREFIX else "")
 LAUNCH_ATTEMPTS = int(env("GROUP_SESSIONS_UI_LAUNCH_ATTEMPTS", "3"))
 # How long one launch may take to reach the IDE before it is retried, and
 # the wait before a retry (which reopens the session if it was created).
@@ -82,6 +95,13 @@ def test_ui_created_session_groups_run_mixed_workloads_in_multiple_browsers(
     ready = threading.Barrier(BROWSER_COUNT)
     done = threading.Barrier(BROWSER_COUNT)
     launch_failed = set()
+    if START_AT_EPOCH:
+        wait_s = float(START_AT_EPOCH) - time.time()
+        print("\n[rstudio-local] %s: starting at %s (in %.0fs)"
+              % (NODE_PREFIX or "this machine", time.strftime("%H:%M:%S", time.localtime(float(START_AT_EPOCH))),
+                 max(0.0, wait_s)))
+        if wait_s > 0:
+            time.sleep(wait_s)
 
     def _browser_worker(context, prefix):
         return _run_browser(context, prefix, ready, done, launch_failed)

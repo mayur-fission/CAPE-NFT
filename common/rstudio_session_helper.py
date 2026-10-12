@@ -224,10 +224,28 @@ def session_status_counts(page):
     return counts
 
 
+def stable_session_status_counts(page, timeout_ms=15000, poll_interval_ms=500):
+    """session_status_counts() once the session list has loaded: the rows
+    load after "New Session" appears (slower under load), so a single read
+    can see an empty or half-filled table. Re-reads every poll_interval_ms
+    until two reads in a row are equal and non-empty; returns the last read
+    after timeout_ms (e.g. {} for a user with no sessions)."""
+    deadline = time.time() + timeout_ms / 1000.0
+    previous = None
+    while True:
+        counts = session_status_counts(page)
+        if counts and counts == previous and "" not in counts:
+            return counts
+        if time.time() >= deadline:
+            return counts
+        previous = counts
+        page.wait_for_timeout(poll_interval_ms)
+
+
 def get_active_session_count(page):
     """Number of running sessions: rows with status Active or Executing
     (ACTIVE_STATUSES). `page` must show the session list."""
-    counts = session_status_counts(page)
+    counts = stable_session_status_counts(page)
     return sum(counts.get(status, 0) for status in ACTIVE_STATUSES)
 
 
