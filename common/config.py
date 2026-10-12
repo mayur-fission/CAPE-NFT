@@ -33,6 +33,18 @@ def env_list(name, default=None):
     return items or default
 
 
+def browser_window_args():
+    """Chromium arguments for headed windows: maximized, plus a fixed
+    --window-size when BROWSER_WINDOW_SIZE is set (e.g. "1920,1080"). Jenkins
+    sets it for headed runs on a virtual display (Xvfb), which has no window
+    manager, so --start-maximized alone does nothing there."""
+    args = ["--start-maximized"]
+    size = env("BROWSER_WINDOW_SIZE")
+    if size:
+        args.append("--window-size=%s" % size)
+    return args
+
+
 def default_session_count():
     """RSTUDIO_SESSION_COUNT (default 10): sessions per multi-session run."""
     return int(env("RSTUDIO_SESSION_COUNT", "10"))

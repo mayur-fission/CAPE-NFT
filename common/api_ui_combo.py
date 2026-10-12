@@ -221,44 +221,79 @@ def create_sessions_in_ui_across_browsers(contexts, user, csv_paths, prefixes=("
     launch (see create_sessions_in_ui_from_csvs()).
     """
     assert len(prefixes) == len(contexts), "need one name prefix per browser context"
+    names_in_csv = {csv_path: read_session_names(csv_path) for csv_path in csv_paths}
+    home_url, before_ids = login_and_quit_sessions_named(
+        contexts, user, prefixed_session_names(csv_paths, prefixes),
+    )
+
+    names_by_csv = {csv_path: [] for csv_path in names_in_csv}
+    launched, failed = [], []
+    for browser_index, (context, prefix) in enumerate(zip(contexts, prefixes)):
+        where = " in browser %d of %d" % (browser_index + 1, len(contexts)) if len(contexts) > 1 else ""
+        for csv_path, names in names_in_csv.items():
+            csv_launched, csv_failed = launch_sessions_in_tabs(
+                context, home_url, [prefix + n for n in names], attempts=attempts,
+                launch_timeout_ms=launch_timeout_ms, retry_wait_s=retry_wait_s, where=where,
+            )
+            launched += csv_launched
+            failed += csv_failed
+            names_by_csv[csv_path] += [s.session_name for s in csv_launched]
+    return home_url, before_ids, names_by_csv, launched, failed
+
+
+def login_and_quit_sessions_named(contexts, user, session_names):
+    """Log in as `user` in each of `contexts`, quit every listed session
+    named one of `session_names` (e.g. left over from an earlier run) and
+    note the rows still listed. The login tabs are then closed (see
+    create_sessions_in_ui_from_csvs()); the contexts stay signed in.
+
+    Returns (home_url, before_ids) for launch_sessions_in_tabs() and
+    quit_ui_sessions_named().
+    """
     home_pages = [context.new_page() for context in contexts]
     home_url = None
     for home in home_pages:
         home_url = login_to_posit_workbench(home, user=user)
     home_page = home_pages[0]
-    names_in_csv = {csv_path: read_session_names(csv_path) for csv_path in csv_paths}
-    quit_sessions_named(home_page, home_url, prefixed_session_names(csv_paths, prefixes))
+    quit_sessions_named(home_page, home_url, session_names)
     goto_session_list(home_page, home_url)
     before_ids = row_ids(home_page)
     for home in home_pages:
         home.close()
+    return home_url, before_ids
 
-    names_by_csv = {csv_path: [] for csv_path in names_in_csv}
+
+def launch_sessions_in_tabs(context, home_url, session_names, attempts=3, launch_timeout_ms=180000,
+                            retry_wait_s=15, where=""):
+    """Launch each of `session_names` from the New Session dialog in its own
+    tab of the signed-in `context`, one after another, with
+    launch_or_reopen_session(); `where` is added to the log lines (e.g.
+    " in browser 1 of 2"). A failed launch does not stop the others.
+
+    Returns (launched, failed): a LaunchedSession per launched name, its tab
+    left on the IDE with the console ready, and "<name>: <error>" for the rest.
+    """
     launched, failed = [], []
-    for browser_index, (context, prefix) in enumerate(zip(contexts, prefixes)):
-        for csv_path, names in names_in_csv.items():
-            for name in [prefix + n for n in names]:
-                print("\n[rstudio-local] launching session %s%s"
-                      % (name, " in browser %d of %d" % (browser_index + 1, len(contexts))
-                               if len(contexts) > 1 else ""))
-                page = context.new_page()
-                try:
-                    launch, ready_s = launch_or_reopen_session(
-                        page, home_url, name, attempts=attempts, launch_timeout_ms=launch_timeout_ms,
-                        retry_wait_s=retry_wait_s,
-                    )
-                except Exception as exc:
-                    page.close()
-                    failed.append("%s: %s" % (name, exc))
-                    print("\n[rstudio-local] session %s could not be launched: %s" % (name, exc))
-                    continue
-                print(
-                    "\n[rstudio-local] session %s launched in %.2fs, console ready %.2fs later"
-                    % (name, launch.elapsed_s, ready_s)
-                )
-                launched.append(LaunchedSession(session_name=name, page=page, launch=launch, error=None))
-                names_by_csv[csv_path].append(name)
-    return home_url, before_ids, names_by_csv, launched, failed
+    for name in session_names:
+        print("\n[rstudio-local] launching session %s%s" % (name, where))
+        page = context.new_page()
+        try:
+            launch, ready_s = launch_or_reopen_session(
+                page, home_url, name, attempts=attempts, launch_timeout_ms=launch_timeout_ms,
+                retry_wait_s=retry_wait_s,
+            )
+        except Exception as exc:
+            save_screenshot(page, "launch_failed_%s.png" % name, always=True)
+            page.close()
+            failed.append("%s: %s" % (name, exc))
+            print("\n[rstudio-local] session %s could not be launched: %s" % (name, exc))
+            continue
+        print(
+            "\n[rstudio-local] session %s launched in %.2fs, console ready %.2fs later"
+            % (name, launch.elapsed_s, ready_s)
+        )
+        launched.append(LaunchedSession(session_name=name, page=page, launch=launch, error=None))
+    return launched, failed
 
 
 def quit_ui_created_sessions(context, home_url, before_ids, csv_paths, prefixes=("",)):
@@ -270,13 +305,21 @@ def quit_ui_created_sessions(context, home_url, before_ids, csv_paths, prefixes=
     left alone. Close the IDE tabs first, so this tab gets a connection.
     Errors are printed, not raised.
     """
-    names = prefixed_session_names(csv_paths, prefixes)
+    quit_ui_sessions_named(
+        context, home_url, before_ids, prefixed_session_names(csv_paths, prefixes),
+        "named in %s" % ", ".join(os.path.basename(p) for p in csv_paths),
+    )
+
+
+def quit_ui_sessions_named(context, home_url, before_ids, session_names, what=""):
+    """quit_ui_created_sessions() for an explicit list of `session_names`;
+    `what` describes them in the log line. Errors are printed, not raised."""
     page = None
     try:
         page = context.new_page()
-        quit_ids = cleanup_and_verify_sessions(page, home_url, before_ids, session_names=names)
-        print("\n[rstudio-local] quit %d session(s) created in the UI (named in %s)"
-              % (len(quit_ids), ", ".join(os.path.basename(p) for p in csv_paths)))
+        quit_ids = cleanup_and_verify_sessions(page, home_url, before_ids, session_names=session_names)
+        print("\n[rstudio-local] quit %d session(s) created in the UI%s"
+              % (len(quit_ids), " (%s)" % what if what else ""))
     except Exception as exc:
         print("\n[rstudio-local] could not quit the sessions created in the UI: %s" % exc)
     finally:

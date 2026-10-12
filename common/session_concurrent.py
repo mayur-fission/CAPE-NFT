@@ -11,7 +11,7 @@ from contextlib import contextmanager
 
 from playwright.sync_api import sync_playwright
 
-from common.config import default_session_count, env, max_workers_for
+from common.config import browser_window_args, default_session_count, env, max_workers_for
 from common.rstudio_session_helper import next_auto_perf_session_names
 from common.rstudio_text_operations import create_text_file
 from common.script_timings import run_timed_console_command_repeatedly
@@ -36,7 +36,7 @@ def _isolated_session_list(headless=True):
     """Yield (page, home_url): a fresh browser of its own, logged in (after
     stagger_login()) and showing the session list. Closed on exit."""
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless, args=["--start-maximized"])
+        browser = p.chromium.launch(headless=headless, args=browser_window_args())
         try:
             context = browser.new_context(ignore_https_errors=True, no_viewport=not headless)
             page = context.new_page()

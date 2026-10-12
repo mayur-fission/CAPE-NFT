@@ -53,6 +53,9 @@ TEST_FILES = [
     'test_create_session_through_ui_and_run_script_group_multi_browser':
         'UI-created sessions, mixed workloads, in UI_BROWSERS browsers launching in parallel (B1_, B2_, ... name prefixes)',
     'test_launch_existing_session_and_run_r_scripts'      : 'Reuse existing API sessions',
+    'test_concurrent_sessions'                            :
+        'CONCURRENT_SESSIONS UI-created sessions (CONCURRENT_SESSION_1, _2, ...) over CONCURRENT_SESSIONS_BROWSERS browsers, ' +
+        'R script sourced in all at once and timed',
 ]
 TEST_NAMES = new ArrayList(TEST_FILES.keySet())
 // The test USE_EC2_NODES spreads over the NODE_LABELS agents.
@@ -72,6 +75,9 @@ READY_FILE = 'evidence/.active_sessions_ready'
 def jobParams = [
     choice(name: 'ENVIRONMENT', choices: ['Dev', 'QA'], description: 'Target environment - picks which .env credential the tests use'),
     booleanParam(name: 'RUN_ALL', defaultValue: false, description: 'Run every test file (ignores the checkboxes below)'),
+    booleanParam(name: 'HEADED', defaultValue: false,
+        description: 'Run the browsers headed (with windows) instead of headless. On a Linux agent they open on a ' +
+                     'virtual 1920x1080 screen (Xvfb, must be installed there); on a Windows agent on its desktop'),
     booleanParam(name: 'RUN_IN_PARALLEL', defaultValue: false,
         description: 'Run the selected test files at the same time, each in its own pytest (one parallel branch per file). ' +
                      'Only for tests that keep to their own sessions, e.g. test_167 + test_168; tests that quit every ' +
@@ -86,8 +92,13 @@ jobParams << string(name: 'SESSION_COUNT', defaultValue: '10',
 jobParams << string(name: 'UI_BROWSERS', defaultValue: '2',
     description: 'Multi-browser test: number of browsers. Each opens one tab per session name in the group CSVs ' +
                  '(5 today), so 2 browsers = 10 sessions')
+jobParams << string(name: 'CONCURRENT_SESSIONS', defaultValue: '10',
+    description: 'test_concurrent_sessions: number of sessions launched and running the R script at the same time')
+jobParams << string(name: 'CONCURRENT_SESSIONS_BROWSERS', defaultValue: '2',
+    description: 'test_concurrent_sessions: number of browsers the sessions are split over, one tab per session. ' +
+                 'Keep it to 5-6 tabs per browser (e.g. 10 sessions -> 2, 30 -> 5). Blank = one browser per 5 sessions')
 jobParams << string(name: 'UI_BROWSER_STAGGER_S', defaultValue: '30',
-    description: 'Multi-browser test: seconds between starting one browser and the next, so logins do not clash')
+    description: 'Multi-browser test and test_concurrent_sessions: seconds between starting one browser and the next, so logins do not clash')
 jobParams << booleanParam(name: 'USE_EC2_NODES', defaultValue: false,
     description: 'Run the multi-browser test on the agents in NODE_LABELS (e.g. EC2) instead of this build\'s agent. ' +
                  'Unticked = run everything here and ignore NODE_LABELS')
@@ -202,6 +213,19 @@ def prepareWorkspace() {
     }
 }
 
+// The command that starts pytest with the agent's Python (pyPath). HEADED on a
+// Linux agent runs it under Xvfb, a virtual screen, since a server has no
+// display; BROWSER_WINDOW_SIZE sizes the windows there (common/config.py).
+def pytestCommand(String pyPath) {
+    if (params.HEADED?.toString() == 'true' && isUnix()) {
+        if (sh(script: 'command -v xvfb-run', returnStatus: true) != 0) {
+            error("HEADED needs Xvfb on agent ${env.NODE_NAME}: install it there (apt-get install -y xvfb xauth), or untick HEADED")
+        }
+        return "BROWSER_WINDOW_SIZE=1920,1080 xvfb-run -a --server-args='-screen 0 1920x1080x24' ${pyPath} -m pytest"
+    }
+    return "${pyPath} -m pytest"
+}
+
 // .env holds credentials; never leave it in a workspace.
 def removeEnvFile() {
     run(isUnix() ? 'rm -f .env' : 'if exist .env del /F /Q .env')
@@ -250,8 +274,12 @@ pipeline {
                         }
                     }
                     env.RUN_NODE_LABELS = nodeLabels.join(',')
-                    def atLeastOne = ['UI_BROWSERS', 'SESSION_COUNT']
-                    ['UI_BROWSERS', 'SESSION_COUNT', 'UI_BROWSER_STAGGER_S', 'PARALLEL_LOGIN_GAP_S', 'GROUP_TEST_DURATION_S',
+                    def concurrentBrowsers = (params.CONCURRENT_SESSIONS_BROWSERS ?: '').trim()
+                    if (concurrentBrowsers && (!(concurrentBrowsers ==~ /\d+/) || concurrentBrowsers.toInteger() < 1)) {
+                        error("CONCURRENT_SESSIONS_BROWSERS must be blank or a whole number of at least 1, got '${params.CONCURRENT_SESSIONS_BROWSERS}'")
+                    }
+                    def atLeastOne = ['UI_BROWSERS', 'SESSION_COUNT', 'CONCURRENT_SESSIONS']
+                    ['UI_BROWSERS', 'SESSION_COUNT', 'CONCURRENT_SESSIONS', 'UI_BROWSER_STAGGER_S', 'PARALLEL_LOGIN_GAP_S', 'GROUP_TEST_DURATION_S',
                      'ACTIVE_SESSIONS_MONITOR_S', 'NODE_START_OFFSET_S'].each { name ->
                         if (params[name] == null) {
                             return
@@ -301,13 +329,16 @@ pipeline {
                     "CLOSE_BROWSER_WAIT_S=${(params.CLOSE_BROWSER_WAIT_S ?: '').trim()}",
                     "ACTIVE_SESSIONS_MONITOR_S=${(params.ACTIVE_SESSIONS_MONITOR_S ?: '1200').trim()}",
                     "ACTIVE_SESSIONS_USERS=${(params.ACTIVE_SESSIONS_USERS ?: '1').trim()}",
+                    "CONCURRENT_SESSIONS=${(params.CONCURRENT_SESSIONS ?: '10').trim()}",
+                    "CONCURRENT_SESSIONS_BROWSERS=${(params.CONCURRENT_SESSIONS_BROWSERS ?: '').trim()}",
+                    "CONCURRENT_SESSIONS_BROWSER_STAGGER_S=${params.UI_BROWSER_STAGGER_S.trim()}",
                 ]) {
                     withCredentials([file(credentialsId: "cape-nft-env-${params.ENVIRONMENT.toLowerCase()}", variable: 'ENV_FILE')]) {
                         script {
                             prepareWorkspace()
 
                             def kArg = params.PYTEST_K?.trim() ? "-k \"${params.PYTEST_K.trim()}\"" : ''
-                            def commonArgs = "-v ${kArg} ${params.EXTRA_PYTEST_ARGS ?: ''} --alluredir=evidence/allure-results"
+                            def commonArgs = "-v ${kArg} ${params.HEADED?.toString() == 'true' ? '--headed' : ''} ${params.EXTRA_PYTEST_ARGS ?: ''} --alluredir=evidence/allure-results"
                             def py = isUnix() ? '.venv/bin/python' : '.venv\\Scripts\\python.exe'
                             def selected = env.SELECTED_TESTS.split(',') as List
                             // Set in 'Select tests': empty unless USE_EC2_NODES is ticked.
@@ -408,7 +439,7 @@ pipeline {
                                         try {
                                             withEnv(branchEnv) {
                                                 statuses[testName] = runStatus(
-                                                    "${py} -m pytest ${testPaths} ${commonArgs} " +
+                                                    "${pytestCommand(py)} ${testPaths} ${commonArgs} " +
                                                     "--junitxml=evidence/junit-${testName}.xml --output=test-results/${testName}")
                                             }
                                         } finally {
@@ -469,7 +500,7 @@ pipeline {
                                                         // This agent's own path: it can be Linux while the build's agent is Windows.
                                                         def nodePy = isUnix() ? '.venv/bin/python' : '.venv\\Scripts\\python.exe'
                                                         statuses[key] = runStatus(
-                                                            "${nodePy} -m pytest tests/${MULTI_NODE_TEST}.py ${commonArgs} " +
+                                                            "${pytestCommand(nodePy)} tests/${MULTI_NODE_TEST}.py ${commonArgs} " +
                                                             "--junitxml=evidence/junit-${MULTI_NODE_TEST}-${prefix}.xml " +
                                                             "--output=test-results/${MULTI_NODE_TEST}-${prefix}")
                                                     }
@@ -499,7 +530,7 @@ pipeline {
                                     }
                                 }
                             } else {
-                                statuses['pytest'] = runStatus("${py} -m pytest ${env.TEST_PATHS} ${commonArgs} --junitxml=evidence/junit.xml")
+                                statuses['pytest'] = runStatus("${pytestCommand(py)} ${env.TEST_PATHS} ${commonArgs} --junitxml=evidence/junit.xml")
                             }
 
                             // 5 = no tests collected: in parallel, a PYTEST_K filter may

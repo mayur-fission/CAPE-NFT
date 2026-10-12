@@ -9,9 +9,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 @pytest.fixture(scope="session")
 def browser_type_launch_args(browser_type_launch_args):
     """Open headed browsers maximized (no effect when headless)."""
+    from common.config import browser_window_args
+
     args = list(browser_type_launch_args.get("args", []))
-    if "--start-maximized" not in args:
-        args.append("--start-maximized")
+    args += [a for a in browser_window_args() if a not in args]
     return {**browser_type_launch_args, "args": args}
 
 
