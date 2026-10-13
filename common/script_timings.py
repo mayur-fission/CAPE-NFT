@@ -12,7 +12,8 @@ from datetime import datetime
 
 from config.perf_report import write_csv_report
 
-from common.config import EVIDENCE_DIR
+from common import locators
+from common.config import EVIDENCE_DIR, env
 from common.evidence import save_screenshot
 from common.step_log import log_step
 from common.rstudio_console_commands import (
@@ -105,6 +106,34 @@ def submit_in_each(ready, command, what=None):
     return pending
 
 
+# How many times a run's tab may crash and be reopened before the run fails.
+TAB_CRASH_REOPENS = int(env("CONSOLE_TAB_CRASH_REOPENS", "3"))
+
+
+def _is_tab_crash(exc):
+    return "Target crashed" in str(exc)
+
+
+def _reopen_crashed_tab(page, timeout_ms=180000):
+    """Open the session of a crashed tab again in a new tab of the same
+    browser and wait for its console, without sending anything to R (it
+    may still be busy with the command). RStudio replays the console on
+    reconnect, so the command's marker is found once it has printed.
+    Returns the new page."""
+    new_page = page.context.new_page()
+    try:
+        new_page.goto(page.url, wait_until="domcontentloaded", timeout=timeout_ms)
+        new_page.locator(locators.CONSOLE_OUTPUT_SELECTOR).wait_for(state="attached", timeout=timeout_ms)
+    except Exception:
+        new_page.close()
+        raise
+    try:
+        page.close()
+    except Exception:
+        pass
+    return new_page
+
+
 def wait_for_console_runs(pending, timeout_ms, poll_interval_ms=500, on_done=None, on_timeout=None,
                           on_poll=None, what=None):
     """Poll submitted console commands until each has finished or run for
@@ -121,6 +150,12 @@ def wait_for_console_runs(pending, timeout_ms, poll_interval_ms=500, on_done=Non
     (console_output_<session name>.png, before on_done) or times out
     (console_timeout_<session name>.png). With `what` (e.g. "R script
     x.R"), each finish, R error and timeout is logged with log_step().
+
+    A tab whose renderer crashes (e.g. the browser host ran out of memory)
+    is reopened up to CONSOLE_TAB_CRASH_REOPENS times and checked again -
+    the command keeps running on the server meanwhile, so its end time is
+    when the reopened tab first shows it finished. record["reopens"] counts
+    them; the page passed to on_done/on_timeout is the reopened one.
     """
     what_ = what or "The command"
     pending = list(pending)
@@ -138,6 +173,17 @@ def wait_for_console_runs(pending, timeout_ms, poll_interval_ms=500, on_done=Non
                 save_screenshot(page, "console_failed_%s.png" % name, always=True)
                 continue
             except Exception as exc:
+                if _is_tab_crash(exc) and record.get("reopens", 0) < TAB_CRASH_REOPENS:
+                    record["reopens"] = record.get("reopens", 0) + 1
+                    log_step("Tab of session %s crashed - reopening it (%d of %d)",
+                             name, record["reopens"], TAB_CRASH_REOPENS)
+                    try:
+                        page = _reopen_crashed_tab(page)
+                        pending[pending.index(item)] = (page, marker, record, context)
+                        log_step("Reopened the tab of session %s", name)
+                        continue
+                    except Exception as reopen_exc:
+                        exc = "tab crashed and could not be reopened: %s" % reopen_exc
                 record["status"] = str(exc)
                 pending.remove(item)
                 log_step("Could not check the console of session %s: %s", name, exc)
