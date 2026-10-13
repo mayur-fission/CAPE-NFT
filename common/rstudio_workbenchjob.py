@@ -10,6 +10,7 @@ from common import locators
 from common.evidence import save_output_file, save_screenshot
 from common.rstudio_console_commands import (
     get_file_size,
+    get_folder_size,
     r_source_command,
     r_string,
     run_console_command,
@@ -17,9 +18,11 @@ from common.rstudio_console_commands import (
 )
 from common.rstudio_session_helper import launch_new_session, open_existing_session
 from common.script_timings import new_run_record, submit_in_each, wait_for_console_runs
+from common.step_log import log_step
 from common.session_actions import (
     close_all_editor_files,
     delete_file,
+    delete_folder,
     recreate_session_folder,
     set_session_working_directory,
 )
@@ -330,23 +333,53 @@ def check_output_file(page, record, output_path, delete=False, remove_dir=None):
     `output_path` exists, else copy it to evidence/ and the Allure report
     (see save_output_file()). With `delete`, then delete it, and remove the
     folder `remove_dir` (when given) if that leaves it empty.
+
+    A folder `output_path` (a script writing many files) must hold at least
+    one file; it is not copied to evidence/, and `delete` removes it with
+    everything in it (also when it is empty).
     """
+    name = record["session_name"]
+    try:
+        folder = get_folder_size(page, output_path)
+    except Exception as exc:
+        record["status"] = "could not check %s: %s" % (output_path, exc)
+        log_step("Output check failed in session %s: %s", name, record["status"])
+        return
+    if folder is not None:
+        count, size = folder
+        if count == 0:
+            record["status"] = "%s is an empty folder" % output_path
+            log_step("Output check failed in session %s: %s", name, record["status"])
+        else:
+            log_step("Output folder %s verified in session %s: %d file(s), %.1f MB",
+                     output_path, name, count, size / 1e6)
+        if delete:
+            _delete_output(page, record, output_path, delete_folder, remove_dir)
+        return
     try:
         size = get_file_size(page, output_path)
     except Exception as exc:
         record["status"] = "could not check %s: %s" % (output_path, exc)
+        log_step("Output check failed in session %s: %s", name, record["status"])
         return
     if size is None:
         record["status"] = "%s was not created" % output_path
+        log_step("Output check failed in session %s: %s", name, record["status"])
     else:
-        print("\n[rstudio-local] session %s: %s is %d bytes" % (record["session_name"], output_path, size))
-        save_output_file(page, record["session_name"], output_path, size=size)
-    if not delete or size is None:
-        return
+        log_step("Output file %s verified in session %s: %d bytes", output_path, name, size)
+        save_output_file(page, name, output_path, size=size)
+    if delete and size is not None:
+        _delete_output(page, record, output_path, delete_file, remove_dir)
+
+
+def _delete_output(page, record, output_path, delete, remove_dir=None):
+    """check_output_file()'s clean-up: delete(page, output_path) (a file or
+    folder helper), then remove `remove_dir` if that left it empty. A
+    failure sets record["status"] unless it already holds an error.
+    """
     try:
-        if not delete_file(page, output_path):
-            record["status"] = "could not delete %s" % output_path
-            return
+        if not delete(page, output_path):
+            raise RuntimeError("it is still there")
         if remove_dir:
             run_console_command(
                 page,
@@ -354,9 +387,11 @@ def check_output_file(page, record, output_path, delete=False, remove_dir=None):
                 "unlink(d, recursive=TRUE)})" % r_string(remove_dir),
                 timeout_ms=10000,
             )
-        print("\n[rstudio-local] session %s: deleted %s" % (record["session_name"], output_path))
+        log_step("Output %s deleted from session %s", output_path, record["session_name"])
     except Exception as exc:
-        record["status"] = "could not delete %s: %s" % (output_path, exc)
+        log_step("Could not delete output %s from session %s: %s", output_path, record["session_name"], exc)
+        if record["status"] == "ok":
+            record["status"] = "could not delete %s: %s" % (output_path, exc)
 
 
 def report_output_file(page, record, output_path):

@@ -152,6 +152,21 @@ def get_file_size(page, path, timeout_ms=10000):
     return None if value == "NA" else int(value)
 
 
+def get_folder_size(page, path, timeout_ms=30000):
+    """(file count, total bytes) of the files under the folder `path`
+    (recursive), or None if `path` is not a folder."""
+    value = read_console_value(
+        page,
+        "local({p <- %s; if (!dir.exists(p)) 'NA' else {f <- list.files(p, recursive=TRUE, full.names=TRUE); "
+        "paste(length(f), format(sum(file.size(f), na.rm=TRUE), scientific=FALSE))}})" % r_string(path),
+        timeout_ms,
+    )
+    if value == "NA":
+        return None
+    count, size = value.split()
+    return int(count), int(size)
+
+
 def read_text_file(page, path, timeout_ms=30000):
     """Contents of the text file `path` (read by printing it in the console),
     or None if it doesn't exist. Meant for small files: the console only
@@ -178,30 +193,60 @@ def get_file_list(page, path, recursive=False, timeout_ms=15000):
     return body.split(_FILE_LIST_SEPARATOR) if body else []
 
 
+class RCommandError(RuntimeError):
+    """A console command submitted by submit_console_command() stopped with
+    an R error; the message is R's."""
+
+
+def _fail_marker(marker):
+    """The marker R prints instead of `marker` when the command errors."""
+    return marker.replace("_DONE_", "_FAIL_", 1)
+
+
 def submit_console_command(page, command, confirm=True):
     """Type `command` into the console and press Enter without waiting for
     it to finish. With confirm (see _type_command()), retypes it if the
     keystrokes were lost.
 
+    The command runs inside tryCatch(), so an R error prints a failure
+    marker with the error message, which is_console_command_done() raises
+    as RCommandError right away instead of waiting for the timeout.
+    Assignments and source() still land in the global environment, and a
+    visible result is still printed (e.g. list.files()), as at top level;
+    for "a; b" only b's result is printed.
+
     Returns (marker, started) for is_console_command_done() or
     wait_for_console_command(); started is when the command was taken.
     """
     marker = _unique_marker("DONE")
-    full_command = "%s; cat(%s, '\\n', sep='')" % (command, _r_split_literal(marker))
+    full_command = (
+        "invisible(tryCatch({(function(r) if (r$visible) print(r$value))(withVisible({%s})); "
+        "cat(%s, '\\n', sep='')}, error=function(e) "
+        "cat(%s, ': Error: ', conditionMessage(e), '%s', '\\n', sep='')))"
+        % (command, _r_split_literal(marker), _r_split_literal(_fail_marker(marker)), _VALUE_END)
+    )
     _type_command(page, full_command, marker=marker if confirm else None)
     return marker, time.time()
 
 
 def is_console_command_done(page, marker):
-    """Non-blocking check for whether `marker` has appeared in the console."""
-    return marker in get_console_output(page)
+    """Non-blocking check for whether `marker` has appeared in the console.
+    Raises RCommandError if the command stopped with an R error.
+    """
+    output = get_console_output(page)
+    if marker in output:
+        return True
+    failed = re.search(re.escape(_fail_marker(marker)) + r": Error: (.*?)" + re.escape(_VALUE_END), output, re.S)
+    if failed:
+        raise RCommandError(" ".join(failed.group(1).split()))
+    return False
 
 
 def wait_for_console_command(page, marker, started, timeout_ms=300000, poll_interval_ms=500):
     """Wait until `marker` appears and return seconds since `started`.
 
-    An R error stops the marker from printing, so errors surface as a
-    RuntimeError timeout rather than a false success.
+    Raises RCommandError as soon as the command stops with an R error, and
+    RuntimeError if it has not finished within timeout_ms.
     """
     deadline = started + timeout_ms / 1000.0
     while time.time() < deadline:

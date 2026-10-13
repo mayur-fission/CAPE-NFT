@@ -12,6 +12,13 @@ openpyxl==3.1.5
 # Reports: Allure steps/attachments (config/perf_report.py)
 allure-pytest==2.13.5
 
+# Session time charts (optional - common/session_time_report.py skips them
+# without these); tzdata gives Windows the IANA timezones
+pandas==2.3.3
+numpy==2.3.4
+matplotlib==3.10.7
+tzdata==2025.2
+
 # Metrics (optional - tests pass without a backend):
 # OTel metrics (common/otel_metrics.py) and the local Prometheus/Grafana
 # stack it feeds (common/observability.py, which also needs PyYAML)

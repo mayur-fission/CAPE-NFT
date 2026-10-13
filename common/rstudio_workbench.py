@@ -62,6 +62,19 @@ def delete_file(page, path, timeout_ms=10000):
     return read_console_value(page, 'format(file.remove(%s))' % r_string(path), timeout_ms) == "TRUE"
 
 
+def delete_folder(page, path, timeout_ms=120000):
+    """Delete the folder `path` with everything in it via unlink(). Returns
+    True if it is gone afterwards. Raises ValueError for an empty path or
+    one that is "/", "." or "~" (or ends in "..").
+    """
+    clean = posixpath.normpath(path or "")
+    if not path or clean in ("/", ".", "~") or posixpath.basename(clean) in ("", "..", "~"):
+        raise ValueError("refusing to delete folder %r" % path)
+    r_path = r_string(clean)
+    r_expr = "{unlink(%s, recursive=TRUE); format(!dir.exists(%s))}" % (r_path, r_path)
+    return read_console_value(page, r_expr, timeout_ms) == "TRUE"
+
+
 def create_folder(page, path, timeout_ms=10000):
     """Create `path` (recursively) via dir.create(). Returns True if created,
     False if it already existed or couldn't be created.

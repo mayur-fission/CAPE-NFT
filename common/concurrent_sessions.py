@@ -24,8 +24,10 @@ from common.api_ui_combo import (
     report_failed_runs,
     run_in_parallel_browsers,
 )
-from common.config import EVIDENCE_DIR
+from common.config import EVIDENCE_DIR, env
 from common.launch_already_created_sessions import close_launched_sessions, run_script_in_launched_sessions
+from common.session_actions import set_session_working_directory
+from common.step_log import log_step
 
 CONCURRENT_SESSION_PREFIX = "CONCURRENT_SESSION_"
 # Every IDE tab keeps a long-poll connection open, and Chrome allows 6
@@ -33,6 +35,9 @@ CONCURRENT_SESSION_PREFIX = "CONCURRENT_SESSION_"
 # their requests and stall (see create_sessions_in_ui_from_csvs()).
 MAX_TABS_PER_BROWSER = 6
 DEFAULT_TABS_PER_BROWSER = 5
+# Working directory set in every session right after it launches; the
+# script itself then runs in its own <output_dir>/<session name> folder.
+SESSION_HOME_DIR = env("CONCURRENT_SESSIONS_HOME_DIR", "/home/posit")
 
 
 def concurrent_session_names(count, prefix=CONCURRENT_SESSION_PREFIX):
@@ -62,14 +67,16 @@ def split_across_browsers(session_names, browser_count):
 def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, user, session_names,
                                       browser_count, label, script_path, output_dir, output_file_name,
                                       script_timeout_ms, stagger_s=0, attempts=3, launch_timeout_ms=180000,
-                                      retry_wait_s=15):
+                                      retry_wait_s=15, delete_output=False):
     """Spread `session_names` over `browser_count` browsers (see
     split_across_browsers()). Each browser logs in as `user`, quits leftover
     sessions with its names, launches each name in its own tab, waits for
     the other browsers, then sources `script_path` in all its tabs at once
     (each in `output_dir`/<session name>, emptied first; a run only counts
     as ok if `output_file_name` is there afterwards) and waits up to
-    `script_timeout_ms`. Browsers start `stagger_s` apart.
+    `script_timeout_ms`. Browsers start `stagger_s` apart. With
+    delete_output, each session's output (file or folder) is deleted once
+    it has been checked, so large outputs do not pile up on the server.
 
     The scripts are skipped everywhere if any browser failed to launch its
     sessions. Tabs are closed and the created sessions quit even on failure.
@@ -77,6 +84,8 @@ def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, u
     Returns (runs, errors): every run record, and "browser <prefix>: <error>"
     per failed browser.
     """
+    log_step("Starting %s: R script %s in %d session(s) over %d browser(s), as user %d",
+             label, os.path.basename(script_path), len(session_names), browser_count, user)
     prefixes = browser_name_prefixes(browser_count)
     names_by_browser = dict(zip(prefixes, split_across_browsers(session_names, browser_count)))
     for prefix, names in names_by_browser.items():
@@ -93,7 +102,7 @@ def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, u
         return _run_script_in_browser(
             context, prefix, names_by_browser[prefix], user, "%s %s" % (label, prefix.rstrip("_")),
             ready, done, launch_failed, attempts, launch_timeout_ms, retry_wait_s,
-            script_path, output_dir, output_file_name, script_timeout_ms,
+            script_path, output_dir, output_file_name, script_timeout_ms, delete_output,
         )
 
     results = run_in_parallel_browsers(
@@ -111,7 +120,7 @@ def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, u
 
 def _run_script_in_browser(context, prefix, session_names, user, label, ready, done, launch_failed,
                            attempts, launch_timeout_ms, retry_wait_s, script_path, output_dir,
-                           output_file_name, script_timeout_ms):
+                           output_file_name, script_timeout_ms, delete_output=False):
     """One browser's part of run_script_in_concurrent_sessions(); a browser
     whose launch fails adds its prefix to `launch_failed`. Returns (runs,
     error): its run records and the error that failed it, else None."""
@@ -126,20 +135,25 @@ def _run_script_in_browser(context, prefix, session_names, user, label, ready, d
                 retry_wait_s=retry_wait_s, where=where,
             )
             assert not failed, "sessions that failed to launch: %s" % failed
+            for session in launched:
+                set_session_working_directory(session.page, path=SESSION_HOME_DIR)
+                log_step("Working directory set to %s in session %s", SESSION_HOME_DIR, session.session_name)
         except Exception:
             launch_failed.add(prefix)
             raise
         finally:
-            print("\n[rstudio-local] browser %s: sessions launched, waiting for the other browsers"
-                  % prefix.rstrip("_"))
+            log_step("%d of %d session(s) ready in this browser - waiting for the other browsers",
+                     len(launched), len(session_names))
             ready.wait()
         if launch_failed:
             raise AssertionError("scripts skipped: launch failed in browser(s) %s"
                                  % sorted(p.rstrip("_") for p in launch_failed))
+        log_step("All browsers are ready - starting the R script %s in every session",
+                 os.path.basename(script_path))
         started = time.time()
         runs += run_script_in_launched_sessions(
             launched, script_path, working_dir=output_dir, timeout_ms=script_timeout_ms,
-            output_path=output_file_name, per_session_dir=True,
+            output_path=output_file_name, per_session_dir=True, delete_output=delete_output,
         )
         failures = report_failed_runs(runs, label, started)
         assert not failures, "runs that did not finish: %s" % failures
@@ -151,6 +165,8 @@ def _run_script_in_browser(context, prefix, session_names, user, label, ready, d
         except threading.BrokenBarrierError:
             pass
         close_launched_sessions(launched)
+        if launched:
+            log_step("Closed %d session tab(s)", len(launched))
         if home_url is not None:
             quit_ui_sessions_named(context, home_url, before_ids, session_names, "browser %s" % prefix.rstrip("_"))
     return runs, error

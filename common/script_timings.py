@@ -14,7 +14,9 @@ from config.perf_report import write_csv_report
 
 from common.config import EVIDENCE_DIR
 from common.evidence import save_screenshot
+from common.step_log import log_step
 from common.rstudio_console_commands import (
+    RCommandError,
     is_console_command_done,
     submit_console_command,
     wait_for_console_command,
@@ -53,7 +55,8 @@ def run_timed_console_command(page, session_name, command, timeout_ms, script_ru
             record["started"] is not None
             and time.time() - record["started"] >= timeout_ms / 1000.0
         )
-        record["status"] = "timed out" if timed_out else str(exc)
+        record["status"] = "timed out" if timed_out else (
+            "R error: %s" % exc if isinstance(exc, RCommandError) else str(exc))
         save_screenshot(page, "console_%s_%s.png" % ("timeout" if timed_out else "failed", session_name),
                         always=True)
         raise
@@ -77,20 +80,25 @@ def run_timed_console_command_repeatedly(page, session_name, command, timeout_ms
     return elapsed
 
 
-def submit_in_each(ready, command):
+def submit_in_each(ready, command, what=None):
     """Submit `command` without waiting in each (page, record, context) of
     `ready`, setting record["started"], and screenshot each console as
     console_input_<session name>.png. Returns the (page, marker, record,
     context) tuples for wait_for_console_runs(); a submit that fails is
-    recorded in its record instead.
+    recorded in its record instead. With `what` (e.g. "R script x.R"),
+    each start or failed start is logged with log_step().
     """
     pending = []
     for page, record, context in ready:
         try:
             marker, record["started"] = submit_console_command(page, command)
             pending.append((page, marker, record, context))
+            if what:
+                log_step("%s started execution in session %s", what, record["session_name"])
         except Exception as exc:
             record["status"] = "submit failed: %s" % exc
+            if what:
+                log_step("%s could not be started in session %s: %s", what, record["session_name"], exc)
             save_screenshot(page, "console_failed_%s.png" % record["session_name"], always=True)
     for page, _, record, _ in pending:
         save_screenshot(page, "console_input_%s.png" % record["session_name"])
@@ -98,7 +106,7 @@ def submit_in_each(ready, command):
 
 
 def wait_for_console_runs(pending, timeout_ms, poll_interval_ms=500, on_done=None, on_timeout=None,
-                          on_poll=None):
+                          on_poll=None, what=None):
     """Poll submitted console commands until each has finished or run for
     `timeout_ms`, so commands in several tabs run concurrently.
 
@@ -107,30 +115,45 @@ def wait_for_console_runs(pending, timeout_ms, poll_interval_ms=500, on_done=Non
     record ends as "ok" (with "ended"), "timed out", or the error raised
     while checking it. on_done/on_timeout(page, record, context) run when a
     command finishes / times out (on_done may set an error status, e.g. for
-    a missing output file); on_poll() runs once per round - keep it quick.
+    a missing output file); a command that stops with an R error ends as
+    "R error: <message>" straight away; on_poll() runs once per round - keep it quick.
     Each console is screenshotted when its command finishes
     (console_output_<session name>.png, before on_done) or times out
-    (console_timeout_<session name>.png).
+    (console_timeout_<session name>.png). With `what` (e.g. "R script
+    x.R"), each finish, R error and timeout is logged with log_step().
     """
+    what_ = what or "The command"
     pending = list(pending)
     while pending:
         for item in list(pending):
             page, marker, record, context = item
+            name = record["session_name"]
             try:
                 done = is_console_command_done(page, marker)
+            except RCommandError as exc:
+                record["status"] = "R error: %s" % exc
+                pending.remove(item)
+                log_step("%s stopped with an R error in session %s after %.2fs: %s",
+                         what_, name, time.time() - record["started"], exc)
+                save_screenshot(page, "console_failed_%s.png" % name, always=True)
+                continue
             except Exception as exc:
                 record["status"] = str(exc)
                 pending.remove(item)
-                print("\n[rstudio-local] session %s: could not check the console: %s" % (record["session_name"], exc))
+                log_step("Could not check the console of session %s: %s", name, exc)
                 continue
             if done:
                 record["ended"], record["status"] = time.time(), "ok"
                 pending.remove(item)
-                save_screenshot(page, "console_output_%s.png" % record["session_name"])
+                if what:
+                    log_step("%s finished execution in session %s in %.2fs", what, name,
+                             record["ended"] - record["started"])
+                save_screenshot(page, "console_output_%s.png" % name)
                 if on_done:
                     on_done(page, record, context)
             elif time.time() - record["started"] >= timeout_ms / 1000.0:
                 record["status"] = "timed out"
+                log_step("%s timed out in session %s after %.0fs", what_, name, timeout_ms / 1000.0)
                 pending.remove(item)
                 save_screenshot(page, "console_timeout_%s.png" % record["session_name"], always=True)
                 if on_timeout:

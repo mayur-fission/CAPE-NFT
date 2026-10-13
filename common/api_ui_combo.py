@@ -51,6 +51,7 @@ from common.session_actions import (
     set_session_working_directory,
 )
 from common.session_cleanup import cleanup_and_verify_sessions, quit_sessions_named
+from common.step_log import current_browser, log_step
 
 
 def ms_left(deadline):
@@ -180,11 +181,13 @@ def run_in_parallel_browsers(browser_name, launch_args, context_args, prefixes, 
                 time.sleep(index * stagger_s)
             with sync_playwright() as playwright:
                 browser = getattr(playwright, browser_name).launch(**launch_args)
+                log_step("Browser %s started (%s)", prefix.rstrip("_"), browser_name)
                 try:
                     context = browser.new_context(**{**context_args, "ignore_https_errors": True})
                     results[index] = (prefix, worker(context, prefix), None)
                 finally:
                     browser.close()
+                    log_step("Browser %s closed", prefix.rstrip("_"))
         except BaseException as exc:
             print("\n[rstudio-local] browser %s failed: %s" % (prefix, exc))
             results[index] = (prefix, None, exc)
@@ -255,7 +258,11 @@ def login_and_quit_sessions_named(contexts, user, session_names):
     for home in home_pages:
         home_url = login_to_posit_workbench(home, user=user)
     home_page = home_pages[0]
-    quit_sessions_named(home_page, home_url, session_names)
+    quit_names = quit_sessions_named(home_page, home_url, session_names)
+    if quit_names:
+        log_step("Quit %d leftover session(s) from an earlier run: %s", len(quit_names), ", ".join(quit_names))
+    else:
+        log_step("No leftover sessions from an earlier run to quit")
     goto_session_list(home_page, home_url)
     before_ids = row_ids(home_page)
     for home in home_pages:
@@ -268,14 +275,16 @@ def launch_sessions_in_tabs(context, home_url, session_names, attempts=3, launch
     """Launch each of `session_names` from the New Session dialog in its own
     tab of the signed-in `context`, one after another, with
     launch_or_reopen_session(); `where` is added to the log lines (e.g.
-    " in browser 1 of 2"). A failed launch does not stop the others.
+    " in browser 1 of 2") unless they come from a browser thread, which
+    log_step() tags itself. A failed launch does not stop the others.
 
     Returns (launched, failed): a LaunchedSession per launched name, its tab
     left on the IDE with the console ready, and "<name>: <error>" for the rest.
     """
+    where = "" if current_browser() else where
     launched, failed = [], []
-    for name in session_names:
-        print("\n[rstudio-local] launching session %s%s" % (name, where))
+    for i, name in enumerate(session_names, 1):
+        log_step("Creating RStudio session %s (%d of %d)%s", name, i, len(session_names), where)
         page = context.new_page()
         try:
             launch, ready_s = launch_or_reopen_session(
@@ -286,12 +295,10 @@ def launch_sessions_in_tabs(context, home_url, session_names, attempts=3, launch
             save_screenshot(page, "launch_failed_%s.png" % name, always=True)
             page.close()
             failed.append("%s: %s" % (name, exc))
-            print("\n[rstudio-local] session %s could not be launched: %s" % (name, exc))
+            log_step("RStudio session %s could not be created%s: %s", name, where, exc)
             continue
-        print(
-            "\n[rstudio-local] session %s launched in %.2fs, console ready %.2fs later"
-            % (name, launch.elapsed_s, ready_s)
-        )
+        log_step("RStudio session %s created successfully%s: IDE opened in %.2fs, console ready %.2fs later",
+                 name, where, launch.elapsed_s, ready_s)
         launched.append(LaunchedSession(session_name=name, page=page, launch=launch, error=None))
     return launched, failed
 
@@ -318,10 +325,9 @@ def quit_ui_sessions_named(context, home_url, before_ids, session_names, what=""
     try:
         page = context.new_page()
         quit_ids = cleanup_and_verify_sessions(page, home_url, before_ids, session_names=session_names)
-        print("\n[rstudio-local] quit %d session(s) created in the UI%s"
-              % (len(quit_ids), " (%s)" % what if what else ""))
+        log_step("Quit %d RStudio session(s) created by this test%s", len(quit_ids), " (%s)" % what if what else "")
     except Exception as exc:
-        print("\n[rstudio-local] could not quit the sessions created in the UI: %s" % exc)
+        log_step("Could not quit the RStudio sessions created by this test: %s", exc)
     finally:
         if page is not None:
             page.close()

@@ -26,11 +26,13 @@ from common.rstudio_workbench import (  # noqa: F401 - re-exported
     close_all_editor_files,
     create_folder,
     delete_file,
+    delete_folder,
     recreate_session_folder,
 )
 from common.rstudio_workbench import login as _login
 from common.session_retry import wait_for_login_slot
 from common.rstudio_workbench import set_working_directory as _set_working_directory
+from common.step_log import log_step
 from common.session_retry import retry
 
 WORKING_DIR = env("RSTUDIO_WORKING_DIR")
@@ -50,7 +52,9 @@ def login_to_posit_workbench(page, user=1):
     username = env("RSTUDIO_USER%s" % user, required=True)
     password = env("RSTUDIO_PASSWORD%s" % password_suffix, required=True)
     wait_for_login_slot()
+    log_step("Logging in to Posit Workbench as %s", username)
     home_url = _login(page, base_url, username=username, password=password)
+    log_step("Login successful: %s is signed in to Posit Workbench", username)
     save_screenshot(page, "login_%s.png" % username)
     return home_url
 

@@ -14,6 +14,7 @@ from common.rstudio_session_helper import is_session_alive, open_existing_sessio
 from common.rstudio_workbenchjob import check_output_file
 from common.script_timings import new_run_record, submit_in_each, wait_for_console_runs
 from common.session_actions import close_all_editor_files, recreate_session_folder, set_session_working_directory
+from common.step_log import log_step
 
 API_SESSION_NAME_PREFIX = "AUTO_API_SESSION_"
 API_SESSION_START = int(env("API_SESSION_START", "105"))
@@ -99,6 +100,7 @@ def run_script_in_launched_sessions(launched, script_path, working_dir=None, tim
     if per_session_dir and not working_dir:
         raise ValueError("per_session_dir needs a working_dir")
     source_command = r_source_command(script_path)
+    what = "R script %s" % posixpath.basename(script_path)
     runs, ready = [], []
 
     for session in launched:
@@ -111,22 +113,22 @@ def run_script_in_launched_sessions(launched, script_path, working_dir=None, tim
         try:
             if session_dir:
                 recreate_session_folder(session.page, working_dir, session.session_name)
-            set_session_working_directory(session.page, path=session_dir or working_dir)
+            if set_session_working_directory(session.page, path=session_dir or working_dir):
+                log_step("Working directory set to %s in session %s%s", session_dir or working_dir,
+                         session.session_name, " (the script's output goes here)" if session_dir else "")
             ready.append((session.page, record, session_dir))
         except Exception as exc:
             record["status"] = "setwd failed: %s" % exc
+            log_step("Could not set the working directory in session %s: %s", session.session_name, exc)
 
     def _on_done(page, record, session_dir):
-        print(
-            "\n[rstudio-local] session %s: %s took %.2fs"
-            % (record["session_name"], source_command, record["ended"] - record["started"])
-        )
         if output_path:
             check_output_file(page, record, output_path, delete=delete_output, remove_dir=session_dir)
 
     wait_for_console_runs(
-        submit_in_each(ready, source_command), timeout_ms, poll_interval_ms, on_done=_on_done,
+        submit_in_each(ready, source_command, what=what), timeout_ms, poll_interval_ms, on_done=_on_done,
         on_timeout=lambda page, record, _: report_console_timeout(page, record["session_name"]), on_poll=on_poll,
+        what=what,
     )
     return runs
 

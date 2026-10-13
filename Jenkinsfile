@@ -55,7 +55,11 @@ TEST_FILES = [
     'test_launch_existing_session_and_run_r_scripts'      : 'Reuse existing API sessions',
     'test_concurrent_sessions'                            :
         'CONCURRENT_SESSIONS UI-created sessions (CONCURRENT_SESSION_1, _2, ...) over CONCURRENT_SESSIONS_BROWSERS browsers, ' +
-        'R script sourced in all at once and timed',
+        'R script sourced in all at once and timed, with session time charts',
+    'test_concurrent_sessions_10min'                      :
+        'CONCURRENT_10MIN_SESSIONS UI-created sessions run the ~10 minute R script (htp_10min.R) at once, timed, with charts',
+    'test_concurrent_sessions_30min'                      :
+        'CONCURRENT_30MIN_SESSIONS UI-created sessions run the ~30 minute R script (htp_30min.R) at once, timed, with charts',
 ]
 TEST_NAMES = new ArrayList(TEST_FILES.keySet())
 // The test USE_EC2_NODES spreads over the NODE_LABELS agents.
@@ -97,8 +101,17 @@ jobParams << string(name: 'CONCURRENT_SESSIONS', defaultValue: '10',
 jobParams << string(name: 'CONCURRENT_SESSIONS_BROWSERS', defaultValue: '2',
     description: 'test_concurrent_sessions: number of browsers the sessions are split over, one tab per session. ' +
                  'Keep it to 5-6 tabs per browser (e.g. 10 sessions -> 2, 30 -> 5). Blank = one browser per 5 sessions')
+jobParams << string(name: 'CONCURRENT_10MIN_SESSIONS', defaultValue: '1',
+    description: 'test_concurrent_sessions_10min: number of sessions running the ~10 minute R script at the same time ' +
+                 '(one browser per 5 sessions)')
+jobParams << string(name: 'CONCURRENT_30MIN_SESSIONS', defaultValue: '1',
+    description: 'test_concurrent_sessions_30min: number of sessions running the ~30 minute R script at the same time ' +
+                 '(one browser per 5 sessions)')
+jobParams << string(name: 'SESSION_TIME_THRESHOLD_S', defaultValue: '',
+    description: 'test_concurrent_sessions, _10min and _30min: slow-session limit in seconds, drawn as a line on the ' +
+                 'session time charts with a count of sessions above it. Blank = no line')
 jobParams << string(name: 'UI_BROWSER_STAGGER_S', defaultValue: '30',
-    description: 'Multi-browser test and test_concurrent_sessions: seconds between starting one browser and the next, so logins do not clash')
+    description: 'Multi-browser test and the test_concurrent_sessions tests: seconds between starting one browser and the next, so logins do not clash')
 jobParams << booleanParam(name: 'USE_EC2_NODES', defaultValue: false,
     description: 'Run the multi-browser test on the agents in NODE_LABELS (e.g. EC2) instead of this build\'s agent. ' +
                  'Unticked = run everything here and ignore NODE_LABELS')
@@ -198,12 +211,13 @@ def prepareWorkspace() {
         // copy writable, since the overrides below are appended to it.
         sh 'rm -f .env && cp "$ENV_FILE" .env && chmod 600 .env'
         sh "printf '\\n%s\\n' ${overrides.collect { "'${it}'" }.join(' ')} >> .env"
-        sh "rm -rf evidence/junit*.xml evidence/allure-results evidence/.login_slot.lock ${STOP_FILE} ${READY_FILE}"
+        sh "rm -rf evidence/junit*.xml evidence/rstudio_script_timings_*.png evidence/allure-results evidence/.login_slot.lock ${STOP_FILE} ${READY_FILE}"
     } else {
         bat '(if exist .env del /F /Q .env) && copy /Y "%ENV_FILE%" .env && attrib -R .env'
         bat "(echo.${overrides.collect { "& echo ${it}" }.join('')})>> .env"
         bat '''
             if exist evidence\\junit*.xml del /F /Q evidence\\junit*.xml
+            if exist evidence\\rstudio_script_timings_*.png del /F /Q evidence\\rstudio_script_timings_*.png
             if exist evidence\\.login_slot.lock del /F /Q evidence\\.login_slot.lock
             if exist evidence\\.active_sessions_stop del /F /Q evidence\\.active_sessions_stop
             if exist evidence\\.active_sessions_ready del /F /Q evidence\\.active_sessions_ready
@@ -278,8 +292,13 @@ pipeline {
                     if (concurrentBrowsers && (!(concurrentBrowsers ==~ /\d+/) || concurrentBrowsers.toInteger() < 1)) {
                         error("CONCURRENT_SESSIONS_BROWSERS must be blank or a whole number of at least 1, got '${params.CONCURRENT_SESSIONS_BROWSERS}'")
                     }
-                    def atLeastOne = ['UI_BROWSERS', 'SESSION_COUNT', 'CONCURRENT_SESSIONS']
-                    ['UI_BROWSERS', 'SESSION_COUNT', 'CONCURRENT_SESSIONS', 'UI_BROWSER_STAGGER_S', 'PARALLEL_LOGIN_GAP_S', 'GROUP_TEST_DURATION_S',
+                    def threshold = (params.SESSION_TIME_THRESHOLD_S ?: '').trim()
+                    if (threshold && !(threshold ==~ /\d+(\.\d+)?/)) {
+                        error("SESSION_TIME_THRESHOLD_S must be blank or a number of seconds, got '${params.SESSION_TIME_THRESHOLD_S}'")
+                    }
+                    def atLeastOne = ['UI_BROWSERS', 'SESSION_COUNT', 'CONCURRENT_SESSIONS', 'CONCURRENT_10MIN_SESSIONS', 'CONCURRENT_30MIN_SESSIONS']
+                    ['UI_BROWSERS', 'SESSION_COUNT', 'CONCURRENT_SESSIONS', 'CONCURRENT_10MIN_SESSIONS', 'CONCURRENT_30MIN_SESSIONS',
+                     'UI_BROWSER_STAGGER_S', 'PARALLEL_LOGIN_GAP_S', 'GROUP_TEST_DURATION_S',
                      'ACTIVE_SESSIONS_MONITOR_S', 'NODE_START_OFFSET_S'].each { name ->
                         if (params[name] == null) {
                             return
@@ -332,6 +351,11 @@ pipeline {
                     "CONCURRENT_SESSIONS=${(params.CONCURRENT_SESSIONS ?: '10').trim()}",
                     "CONCURRENT_SESSIONS_BROWSERS=${(params.CONCURRENT_SESSIONS_BROWSERS ?: '').trim()}",
                     "CONCURRENT_SESSIONS_BROWSER_STAGGER_S=${params.UI_BROWSER_STAGGER_S.trim()}",
+                    "CONCURRENT_10MIN_SESSIONS=${(params.CONCURRENT_10MIN_SESSIONS ?: '1').trim()}",
+                    "CONCURRENT_30MIN_SESSIONS=${(params.CONCURRENT_30MIN_SESSIONS ?: '1').trim()}",
+                    "CONCURRENT_SESSIONS_THRESHOLD_S=${(params.SESSION_TIME_THRESHOLD_S ?: '').trim()}",
+                    "CONCURRENT_10MIN_THRESHOLD_S=${(params.SESSION_TIME_THRESHOLD_S ?: '').trim()}",
+                    "CONCURRENT_30MIN_THRESHOLD_S=${(params.SESSION_TIME_THRESHOLD_S ?: '').trim()}",
                 ]) {
                     withCredentials([file(credentialsId: "cape-nft-env-${params.ENVIRONMENT.toLowerCase()}", variable: 'ENV_FILE')]) {
                         script {
@@ -555,7 +579,8 @@ pipeline {
     post {
         always {
             junit testResults: 'evidence/junit*.xml', allowEmptyResults: true
-            archiveArtifacts artifacts: 'evidence/**/*.csv, evidence/**/*.json, testdata/session_ids_U*.csv, test-results/**',
+            // Session time charts (common/session_time_report.py), not the screenshots.
+            archiveArtifacts artifacts: 'evidence/**/*.csv, evidence/**/*.json, evidence/rstudio_script_timings_*.png, testdata/session_ids_U*.csv, test-results/**',
                              allowEmptyArchive: true
             script {
                 try {
