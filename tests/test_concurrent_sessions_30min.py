@@ -52,6 +52,9 @@ SCRIPT_OUTPUTS = {
 OUTPUT_FILE_NAME = env("CONCURRENT_30MIN_OUTPUT_FILE", SCRIPT_OUTPUTS.get(posixpath.basename(SCRIPT_PATH), ""))
 # The script runs for ~30 minutes; leave headroom on top.
 SCRIPT_TIMEOUT_MS = int(env("CONCURRENT_30MIN_SCRIPT_TIMEOUT_MS", "2400000"))
+# How often each console is checked for the end of the script; a 30-minute
+# run does not need sub-second timing, and fewer checks keep the tabs light.
+POLL_INTERVAL_MS = int(env("CONCURRENT_30MIN_POLL_MS", "5000"))
 TIMINGS_LABEL = "concurrent_30min_%d_sessions_%d_browsers_U%d" % (SESSION_COUNT, BROWSER_COUNT, USER)
 # Slow-session limit drawn on the session time charts (blank = none).
 THRESHOLD_S = float(env("CONCURRENT_30MIN_THRESHOLD_S") or 0) or None
@@ -78,7 +81,7 @@ def test_concurrent_sessions_run_30min_r_script(
         browser_name, browser_type_launch_args, browser_context_args, USER, SESSION_NAMES, BROWSER_COUNT,
         TIMINGS_LABEL, SCRIPT_PATH, OUTPUT_DIR, OUTPUT_FILE_NAME, SCRIPT_TIMEOUT_MS,
         stagger_s=BROWSER_STAGGER_S, attempts=LAUNCH_ATTEMPTS, launch_timeout_ms=LAUNCH_TIMEOUT_MS,
-        retry_wait_s=LAUNCH_RETRY_WAIT_S, delete_output=DELETE_OUTPUT,
+        retry_wait_s=LAUNCH_RETRY_WAIT_S, delete_output=DELETE_OUTPUT, poll_interval_ms=POLL_INTERVAL_MS,
     )
     timings_csv = script_timings_csv_path(TIMINGS_LABEL)
     write_script_timings_csv(timings_csv, runs)

@@ -67,7 +67,7 @@ def split_across_browsers(session_names, browser_count):
 def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, user, session_names,
                                       browser_count, label, script_path, output_dir, output_file_name,
                                       script_timeout_ms, stagger_s=0, attempts=3, launch_timeout_ms=180000,
-                                      retry_wait_s=15, delete_output=False):
+                                      retry_wait_s=15, delete_output=False, poll_interval_ms=500):
     """Spread `session_names` over `browser_count` browsers (see
     split_across_browsers()). Each browser logs in as `user`, quits leftover
     sessions with its names, launches each name in its own tab, waits for
@@ -77,6 +77,7 @@ def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, u
     `script_timeout_ms`. Browsers start `stagger_s` apart. With
     delete_output, each session's output (file or folder) is deleted once
     it has been checked, so large outputs do not pile up on the server.
+    Each console is checked every `poll_interval_ms` while the scripts run.
 
     The scripts are skipped everywhere if any browser failed to launch its
     sessions. Tabs are closed and the created sessions quit even on failure.
@@ -102,7 +103,7 @@ def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, u
         return _run_script_in_browser(
             context, prefix, names_by_browser[prefix], user, "%s %s" % (label, prefix.rstrip("_")),
             ready, done, launch_failed, attempts, launch_timeout_ms, retry_wait_s,
-            script_path, output_dir, output_file_name, script_timeout_ms, delete_output,
+            script_path, output_dir, output_file_name, script_timeout_ms, delete_output, poll_interval_ms,
         )
 
     results = run_in_parallel_browsers(
@@ -120,7 +121,7 @@ def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, u
 
 def _run_script_in_browser(context, prefix, session_names, user, label, ready, done, launch_failed,
                            attempts, launch_timeout_ms, retry_wait_s, script_path, output_dir,
-                           output_file_name, script_timeout_ms, delete_output=False):
+                           output_file_name, script_timeout_ms, delete_output=False, poll_interval_ms=500):
     """One browser's part of run_script_in_concurrent_sessions(); a browser
     whose launch fails adds its prefix to `launch_failed`. Returns (runs,
     error): its run records and the error that failed it, else None."""
@@ -154,6 +155,7 @@ def _run_script_in_browser(context, prefix, session_names, user, label, ready, d
         runs += run_script_in_launched_sessions(
             launched, script_path, working_dir=output_dir, timeout_ms=script_timeout_ms,
             output_path=output_file_name, per_session_dir=True, delete_output=delete_output,
+            poll_interval_ms=poll_interval_ms,
         )
         failures = report_failed_runs(runs, label, started)
         assert not failures, "runs that did not finish: %s" % failures

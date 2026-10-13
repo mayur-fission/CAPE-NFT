@@ -37,8 +37,12 @@ def browser_window_args():
     """Chromium arguments for headed windows: maximized, plus a fixed
     --window-size when BROWSER_WINDOW_SIZE is set (e.g. "1920,1080"). Jenkins
     sets it for headed runs on a virtual display (Xvfb), which has no window
-    manager, so --start-maximized alone does nothing there."""
-    args = ["--start-maximized"]
+    manager, so --start-maximized alone does nothing there.
+
+    Also --disable-dev-shm-usage: Docker gives /dev/shm only 64MB, and
+    Chromium tabs crash ("Target crashed") once it fills up, e.g. with
+    many RStudio tabs open for a long script run."""
+    args = ["--start-maximized", "--disable-dev-shm-usage"]
     size = env("BROWSER_WINDOW_SIZE")
     if size:
         args.append("--window-size=%s" % size)

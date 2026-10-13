@@ -233,10 +233,24 @@ def is_console_command_done(page, marker):
     """Non-blocking check for whether `marker` has appeared in the console.
     Raises RCommandError if the command stopped with an R error.
     """
-    output = get_console_output(page)
-    if marker in output:
+    # Search the console's textContent in the page and send back only what
+    # matched: inner_text() forces a layout and copies the whole console
+    # every poll, which over a long run with many tabs crashes the renderer.
+    found = page.evaluate(
+        """([selector, marker, failMarker]) => {
+            const el = document.querySelector(selector);
+            const text = el ? el.textContent : "";
+            if (text.includes(marker)) return true;
+            const i = text.indexOf(failMarker);
+            return i < 0 ? null : text.slice(i, i + 4000);
+        }""",
+        [locators.CONSOLE_OUTPUT_SELECTOR, marker, _fail_marker(marker)],
+    )
+    if found is True:
         return True
-    failed = re.search(re.escape(_fail_marker(marker)) + r": Error: (.*?)" + re.escape(_VALUE_END), output, re.S)
+    if found is None:
+        return False
+    failed = re.search(re.escape(_fail_marker(marker)) + r": Error: (.*?)" + re.escape(_VALUE_END), found, re.S)
     if failed:
         raise RCommandError(" ".join(failed.group(1).split()))
     return False
