@@ -86,6 +86,10 @@ Everything a run produces goes to `evidence/` (git-ignored):
 - `rstudio_*_aggregate_report.csv` / `*_launch_perf.json` - JMeter-style
   launch statistics
 - `allure-results/` when run with `--alluredir=evidence/allure-results`
+- screenshots (also attached to Allure): failures only by default;
+  `EVIDENCE_SCREENSHOTS=1` takes one at every step (Jenkins: SCREENSHOT_ALL_STEPS)
+- `output_<session>_<file>` - copies of the files the sessions wrote, only with
+  `EVIDENCE_TEST_DATA=1` (Jenkins: CAPTURE_TEST_DATA)
 
 The API tests also write the ids of the sessions they create to
 `testdata/session_ids_U<user>.csv` (git-ignored), which later tests reuse.

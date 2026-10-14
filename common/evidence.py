@@ -4,8 +4,10 @@ saved under evidence/ and attached to the running test's Allure report.
 Every helper prints its errors instead of raising, so collecting evidence
 never fails a test.
 
-Set EVIDENCE_SCREENSHOTS=0 to skip the screenshots (e.g. for very large
-runs); failure screenshots are still taken.
+By default only failures are screenshotted; set EVIDENCE_SCREENSHOTS=1 for
+a screenshot of every step (Jenkins: SCREENSHOT_ALL_STEPS). Copies of the
+files a session wrote are only kept with EVIDENCE_TEST_DATA=1 (Jenkins:
+CAPTURE_TEST_DATA). Reports and metrics do not depend on either.
 """
 import os
 import posixpath
@@ -17,7 +19,9 @@ from config.perf_report import attach_allure_file
 from common.config import EVIDENCE_DIR, env
 from common.rstudio_console_commands import read_text_file
 
-SCREENSHOTS_ENABLED = env("EVIDENCE_SCREENSHOTS", "1") not in ("0", "false", "False", "no")
+_OFF = ("", "0", "false", "False", "no")
+SCREENSHOTS_ENABLED = env("EVIDENCE_SCREENSHOTS", "0") not in _OFF
+TEST_DATA_ENABLED = env("EVIDENCE_TEST_DATA", "0") not in _OFF
 # Larger output files are not copied: they are read back through the
 # console, which only keeps its last lines.
 OUTPUT_FILE_MAX_BYTES = int(env("EVIDENCE_OUTPUT_FILE_MAX_BYTES", "200000"))
@@ -33,7 +37,7 @@ def _evidence_path(name):
 
 def save_screenshot(page, name, always=False):
     """Screenshot `page` to evidence/<name> (timestamped) and attach it to
-    Allure as `name`. Skipped when EVIDENCE_SCREENSHOTS=0, unless `always`
+    Allure as `name`. Skipped unless EVIDENCE_SCREENSHOTS=1 or `always`
     (use it for failures).
     """
     if not (SCREENSHOTS_ENABLED or always):
@@ -52,8 +56,11 @@ def save_output_file(page, session_name, path, size=None):
     """Copy the text file `path` (e.g. a script's CSV output) from the
     session to evidence/output_<session name>_<file name> (timestamped) and
     attach it to Allure. Pass its `size` in bytes when known: files over
-    EVIDENCE_OUTPUT_FILE_MAX_BYTES are skipped.
+    EVIDENCE_OUTPUT_FILE_MAX_BYTES are skipped, and nothing is copied
+    unless EVIDENCE_TEST_DATA=1.
     """
+    if not TEST_DATA_ENABLED:
+        return
     if size is not None and size > OUTPUT_FILE_MAX_BYTES:
         print("\n[rstudio-local] session %s: %s is %d bytes, over EVIDENCE_OUTPUT_FILE_MAX_BYTES (%d) - not copied"
               % (session_name, path, size, OUTPUT_FILE_MAX_BYTES))

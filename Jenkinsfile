@@ -29,21 +29,11 @@
 // Test file (without .py) -> checkbox description, in the order shown in Jenkins.
 // No `def`: a script-level `def` is not reliably visible inside pipeline blocks.
 TEST_FILES = [
-    // First, so its checkbox sits right below RUN_IN_PARALLEL.
+    // First, so its checkbox sits right below RUN_ALL.
     'test_active_session_count'                           :
         'Count Active + Executing sessions every 10 s. It logs in first, the other ticked tests ' +
         'start once it has (it runs alongside them), and it stops when they all finish or after ACTIVE_SESSIONS_MONITOR_S (20 min)',
-    'test_create_and_launch_single_session'             : 'One new session reaches its IDE',
-    'test_create_and_launch_multiple_sessions'            : 'Several sessions',
-    'test_create_and_launch_multiple_sessions_user1'      : 'Several sessions, user 1, R scripts in tabs',
-    'test_create_and_launch_multiple_sessions_user2'      : 'Several sessions, user 2, R scripts in tabs',
-    'test_two_user_login'                                 : 'Two users signed in at once',
-    'test_rstudio_sessions'                               : 'Sessions stay alive while held idle',
-    'test_rstudio_session_perf'                           : 'Launch time (single / sequential / concurrent), projects, text files',
-    'test_rstudio_run_r_script_perf'                      : 'R script time in new sessions, one or many users',
-    'test_rstudio_source_script_perf'                     : 'R script time in existing sessions',
     'test_create_sessions_run_r_close_browser'            : 'Scripts and Workbench jobs keep running after the tab closes',
-    'test_run_high_throughput_job'                        : 'High-throughput script, timed',
     'test_167'                                            : 'US 167 - high-throughput script, timed',
     'test_168'                                            : 'US 168 - high-throughput script, timed',
     'test_launch_sessions_api_user1'                      : 'Create / relaunch sessions through the API only',
@@ -76,71 +66,121 @@ READY_FILE = 'evidence/.active_sessions_ready'
 // job's whole parameter list on every build: a stale parameter (e.g. the old
 // ENV dropdown) or one added by hand in the Jenkins UI is removed, and the
 // order always matches this list.
-def jobParams = [
-    choice(name: 'ENVIRONMENT', choices: ['Dev', 'QA'], description: 'Target environment - picks which .env credential the tests use'),
-    booleanParam(name: 'RUN_ALL', defaultValue: false, description: 'Run every test file (ignores the checkboxes below)'),
-    booleanParam(name: 'HEADED', defaultValue: false,
-        description: 'Run the browsers headed (with windows) instead of headless. On a Linux agent they open on a ' +
-                     'virtual 1920x1080 screen (Xvfb, must be installed there); on a Windows agent on its desktop'),
-    booleanParam(name: 'RUN_IN_PARALLEL', defaultValue: false,
-        description: 'Run the selected test files at the same time, each in its own pytest (one parallel branch per file). ' +
-                     'Only for tests that keep to their own sessions, e.g. test_167 + test_168; tests that quit every ' +
-                     'automation session or reuse the same session names will interfere with each other.'),
-]
+def jobParams = []
+// Descriptions: what it does | values | default | which tests use it.
+// --- Environment ---
+jobParams << choice(name: 'ENVIRONMENT', choices: ['Dev', 'QA'],
+    description: '[Environment] Workbench server the tests run against. Dev uses the secret file cape-nft-env-dev, ' +
+                 'QA uses cape-nft-env-qa (base URL, users, passwords, API tokens). Used by: every test')
+// --- EC2 nodes ---
+jobParams << booleanParam(name: 'USE_EC2_NODES', defaultValue: false,
+    description: '[EC2 nodes] Ticked: test_create_session_through_ui_and_run_script_group_multi_browser runs once on each ' +
+                 'agent in NODE_LABELS, all at the same time, as the same user; every other ticked test still runs on ' +
+                 'this build\'s agent. That test must be ticked too, or the build stops. Unticked (default): everything ' +
+                 'runs on this build\'s agent and NODE_LABELS / NODE_START_OFFSET_S are ignored')
+jobParams << string(name: 'NODE_LABELS', defaultValue: 'cape-nft-load-1,cape-nft-load-2',
+    description: '[EC2 nodes] With USE_EC2_NODES: Jenkins agent labels, separated by commas (must not be empty). Agent 1 ' +
+                 'prefixes its session names with N1_, agent 2 with N2_, and so on. Sessions = agents x UI_BROWSERS x 5, ' +
+                 'e.g. 2 labels x 4 browsers = 40. Default: cape-nft-load-1,cape-nft-load-2')
+jobParams << string(name: 'NODE_START_OFFSET_S', defaultValue: '30',
+    description: '[EC2 nodes] With USE_EC2_NODES: seconds between one agent starting its browsers and the next (agent 1 at ' +
+                 '0 s, agent 2 at this, agent 3 at twice this...), so their logins do not collide. Whole number, 0 or more. ' +
+                 'Default: 30. Keep UI_BROWSER_STAGGER_S at least agents x this (2 agents: 30 here, 60 there)')
+// --- Browser and evidence ---
+jobParams << booleanParam(name: 'HEADED', defaultValue: false,
+    description: '[Browser and evidence] Ticked: browsers open with windows (pytest --headed). On a Linux agent they open on a ' +
+                 'virtual 1920x1080 screen (needs xvfb installed there, else the build stops); on a Windows agent on its ' +
+                 'desktop. Uses more memory per tab. Unticked (default): headless')
+jobParams << booleanParam(name: 'SCREENSHOT_ALL_STEPS', defaultValue: false,
+    description: '[Browser and evidence] Ticked: a screenshot at every step (session opened, script started, script ' +
+                 'finished...), attached to Allure. Unticked (default): screenshots only when something fails. Reports, ' +
+                 'timing CSVs and charts are produced either way. Adds time and disk use on large runs')
+jobParams << booleanParam(name: 'CAPTURE_TEST_DATA', defaultValue: false,
+    description: '[Browser and evidence] Ticked: keep the data the run creates - copies of the output files the sessions ' +
+                 'write (evidence/output_*, files up to 200 KB) and the created session id lists ' +
+                 '(testdata/session_ids_U<user>.csv), attached to Allure and archived with the build. Unticked (default): ' +
+                 'not kept (the id lists are still written for later tests, just not archived)')
+// --- How tests run ---
+jobParams << booleanParam(name: 'RUN_IN_PARALLEL', defaultValue: false,
+    description: '[How tests run] Ticked: the ticked test files start at the same time, each in its own pytest (one ' +
+                 'Jenkins parallel branch per file). Only for tests that keep to their own sessions (e.g. test_167 + ' +
+                 'test_168); tests that quit all automation sessions or use the same session names interfere with each ' +
+                 'other. Unticked (default): the files run one after another in a single pytest')
+jobParams << string(name: 'PARALLEL_LOGIN_GAP_S', defaultValue: '30',
+    description: '[How tests run] With RUN_IN_PARALLEL: minimum seconds between any two logins across all the parallel ' +
+                 'tests, since Workbench fails sign-ins that happen at the same time. Whole number, 0 or more. Default: 30. ' +
+                 'Ignored when RUN_IN_PARALLEL is unticked')
+jobParams << booleanParam(name: 'RUN_ALL', defaultValue: false,
+    description: '[How tests run] Ticked: run every test file below, whatever is ticked. Unticked (default): only the ' +
+                 'ticked files run (at least one is required)')
+// --- Tests to run (one checkbox per file) ---
 for (name in TEST_NAMES) {
     jobParams << booleanParam(name: name, defaultValue: false, description: TEST_FILES[name])
 }
+// --- Shared by several tests ---
 jobParams << string(name: 'SESSION_COUNT', defaultValue: '10',
-    description: 'RSTUDIO_SESSION_COUNT for the multi-session tests (e.g. test_168, test_create_sessions_run_r_close_browser): ' +
-                 'sessions each test launches. Overrides the value in .env. With USE_EC2_NODES this is per agent')
-jobParams << string(name: 'UI_BROWSERS', defaultValue: '2',
-    description: 'Multi-browser test: number of browsers. Each opens one tab per session name in the group CSVs ' +
-                 '(5 today), so 2 browsers = 10 sessions')
-jobParams << string(name: 'CONCURRENT_SESSIONS', defaultValue: '10',
-    description: 'test_concurrent_sessions: number of sessions launched and running the R script at the same time')
-jobParams << string(name: 'CONCURRENT_SESSIONS_BROWSERS', defaultValue: '2',
-    description: 'test_concurrent_sessions: number of browsers the sessions are split over, one tab per session. ' +
-                 'Keep it to 5-6 tabs per browser (e.g. 10 sessions -> 2, 30 -> 5). Blank = one browser per 5 sessions')
-jobParams << string(name: 'CONCURRENT_10MIN_SESSIONS', defaultValue: '1',
-    description: 'test_concurrent_sessions_10min: number of sessions running the ~10 minute R script at the same time ' +
-                 '(one browser per 5 sessions)')
-jobParams << string(name: 'CONCURRENT_30MIN_SESSIONS', defaultValue: '1',
-    description: 'test_concurrent_sessions_30min: number of sessions running the ~30 minute R script at the same time ' +
-                 '(one browser per 5 sessions)')
-jobParams << string(name: 'SESSION_TIME_THRESHOLD_S', defaultValue: '',
-    description: 'test_concurrent_sessions, _10min and _30min: slow-session limit in seconds, drawn as a line on the ' +
-                 'session time charts with a count of sessions above it. Blank = no line')
+    description: '[Shared] Sessions each multi-session test launches (sets RSTUDIO_SESSION_COUNT, overriding .env). Whole ' +
+                 'number, at least 1. Default: 10. Used by: test_168 and ' +
+                 'test_create_sessions_run_r_close_browser. Not used by the concurrent-session tests (see below)')
 jobParams << string(name: 'UI_BROWSER_STAGGER_S', defaultValue: '30',
-    description: 'Multi-browser test and the test_concurrent_sessions tests: seconds between starting one browser and the next, so logins do not clash')
-jobParams << booleanParam(name: 'USE_EC2_NODES', defaultValue: false,
-    description: 'Run the multi-browser test on the agents in NODE_LABELS (e.g. EC2) instead of this build\'s agent. ' +
-                 'Unticked = run everything here and ignore NODE_LABELS')
-jobParams << string(name: 'NODE_LABELS', defaultValue: 'cape-nft-load-1,cape-nft-load-2',
-    description: 'With USE_EC2_NODES: agent labels separated by commas. The multi-browser test runs once per label at the ' +
-                 'same time, as the same user, with UI_BROWSERS browsers each and N1_, N2_, ... in front of the session ' +
-                 'names (so 2 labels x 4 browsers x 5 names = 40 sessions). The other ticked tests run on this build\'s ' +
-                 'agent alongside')
-jobParams << string(name: 'NODE_START_OFFSET_S', defaultValue: '30',
-    description: 'With USE_EC2_NODES: seconds between one agent starting its browsers and the next, so logins from ' +
-                 'different agents do not land together. Keep UI_BROWSER_STAGGER_S >= agents x this (e.g. 2 agents: 30 and 60)')
-jobParams << string(name: 'PARALLEL_LOGIN_GAP_S', defaultValue: '30',
-    description: 'With RUN_IN_PARALLEL: minimum seconds between any two logins across all the parallel tests ' +
-                 '(Workbench fails sign-ins that happen at the same time)')
+    description: '[Shared] Seconds between starting one browser and the next within a test, so their logins do not ' +
+                 'collide. Whole number, 0 or more. Default: 30. A run with N browsers takes (N-1) x this to get them all ' +
+                 'started. Used by: the multi-browser group test and test_concurrent_sessions, _10min, _30min')
 jobParams << string(name: 'GROUP_TEST_DURATION_S', defaultValue: '180',
-    description: 'Group tests (API, UI and multi-browser): how long the workloads run, in seconds')
+    description: '[Shared] How long the mixed workloads keep running in the group tests, in seconds. Whole number. ' +
+                 'Default: 180 (3 min). Used by: test_create_session_through_api_and_run_script_group, ' +
+                 'test_create_session_through_ui_and_run_script_group and its _multi_browser version')
+// --- Multi-browser test ---
+jobParams << string(name: 'UI_BROWSERS', defaultValue: '2',
+    description: '[Multi-browser test] Browsers test_create_session_through_ui_and_run_script_group_multi_browser opens ' +
+                 '(B1_, B2_... name prefixes). Each opens one tab per session name in the group CSVs (5 today), so ' +
+                 'sessions = this x 5 (2 = 10 sessions). Whole number, at least 1. Default: 2. With USE_EC2_NODES this is ' +
+                 'per agent. About 4-6 browsers fit on a 16 GB agent')
+// --- Concurrent session tests ---
+jobParams << string(name: 'CONCURRENT_SESSIONS', defaultValue: '10',
+    description: '[Concurrent session tests] test_concurrent_sessions: sessions (CONCURRENT_SESSION_1, _2...) launched from ' +
+                 'the UI that all source the short R script (generate_10kb_csv.R) at the same moment, each timed. Whole ' +
+                 'number, at least 1. Default: 10')
+jobParams << string(name: 'CONCURRENT_SESSIONS_BROWSERS', defaultValue: '2',
+    description: '[Concurrent session tests] test_concurrent_sessions only: browsers the CONCURRENT_SESSIONS sessions are ' +
+                 'split over, one tab per session. Keep it to 5-6 tabs per browser (10 sessions: 2, 30 sessions: 5). Blank = ' +
+                 'one browser per 5 sessions. Default: 2. The _10min and _30min tests always use one browser per 5 sessions')
+jobParams << string(name: 'CONCURRENT_10MIN_SESSIONS', defaultValue: '1',
+    description: '[Concurrent session tests] test_concurrent_sessions_10min: sessions that all source the ~10 minute R script ' +
+                 '(htp_10min.R) at the same moment, each timed (limit 15 min). One browser per 5 sessions. Whole number, ' +
+                 'at least 1. Default: 1')
+jobParams << string(name: 'CONCURRENT_30MIN_SESSIONS', defaultValue: '1',
+    description: '[Concurrent session tests] test_concurrent_sessions_30min: sessions that all source the ~30 minute R script ' +
+                 '(htp_30min.R) at the same moment, each timed (limit 40 min). One browser per 5 sessions. Whole number, ' +
+                 'at least 1. Default: 1. On the 16 GB Jenkins host about 15 is the safe maximum (25 crashed browser tabs)')
+jobParams << string(name: 'SESSION_TIME_THRESHOLD_S', defaultValue: '',
+    description: '[Concurrent session tests] Slow-session limit in seconds (decimals allowed, e.g. 650): drawn as a line on ' +
+                 'the session time charts, with a count of the sessions above it. It only marks the charts and does not ' +
+                 'fail the test. Blank (default) = no line. Used by: test_concurrent_sessions, _10min, _30min')
+// --- Other tests ---
 jobParams << string(name: 'HIGH_THROUGHPUT_DURATION_S', defaultValue: '',
-    description: 'test_167 / test_168: seconds each high-throughput script run may take before it counts as failed. ' +
-                 'Blank = HIGH_THROUGHPUT_JOB_TEST_DURATION_SECONDS from .env (180 if unset)')
+    description: '[Other tests] test_167 / test_168: seconds each high-throughput script run may take before it counts as ' +
+                 'failed. Whole number, at least 1. Blank (default) = HIGH_THROUGHPUT_JOB_TEST_DURATION_SECONDS from .env ' +
+                 '(180 if not set there)')
 jobParams << string(name: 'CLOSE_BROWSER_WAIT_S', defaultValue: '',
-    description: 'test_create_sessions_run_r_close_browser: seconds the sessions are left running with their tabs closed ' +
-                 'before they are quit. Blank = RSTUDIO_WORKBENCH_JOB_TEST_DURATION_SECONDS from .env (300 if unset)')
+    description: '[Other tests] test_create_sessions_run_r_close_browser: seconds the sessions keep running with their tabs ' +
+                 'closed before they are quit. Whole number. Blank (default) = RSTUDIO_WORKBENCH_JOB_TEST_DURATION_SECONDS ' +
+                 'from .env (300 if not set there)')
+// --- Active session count ---
 jobParams << string(name: 'ACTIVE_SESSIONS_MONITOR_S', defaultValue: '1200',
-    description: 'test_active_session_count: the longest it keeps counting, in seconds (1200 = 20 min). With other tests ' +
-                 'ticked it stops sooner, once they have all finished; ticked on its own it counts for this long')
+    description: '[Active session count] test_active_session_count: the longest it keeps counting Active + Executing ' +
+                 'sessions (every 10 s), in seconds. Whole number. Default: 1200 (20 min). Ticked with other tests, it ' +
+                 'stops as soon as they have all finished; ticked on its own, it counts for this long')
 jobParams << string(name: 'ACTIVE_SESSIONS_USERS', defaultValue: '1',
-    description: 'test_active_session_count: users whose sessions are counted and added up, e.g. "1,2"')
-jobParams << string(name: 'PYTEST_K', defaultValue: '', description: 'Optional pytest -k filter applied within the selected files (e.g. "concurrent")')
-jobParams << string(name: 'EXTRA_PYTEST_ARGS', defaultValue: '', description: 'Optional extra pytest arguments (e.g. "-x" or "--maxfail=2")')
+    description: '[Active session count] test_active_session_count: user numbers whose sessions are counted and added up, ' +
+                 'separated by commas (e.g. 1 or 1,2). The users come from .env. Default: 1')
+// --- pytest ---
+jobParams << string(name: 'PYTEST_K', defaultValue: '',
+    description: '[pytest] Optional: pytest -k expression that picks tests inside the ticked files by name (e.g. ' +
+                 '"concurrent", or "single and not perf"). Blank (default) = every test in the ticked files')
+jobParams << string(name: 'EXTRA_PYTEST_ARGS', defaultValue: '',
+    description: '[pytest] Optional: extra arguments added to the pytest command, e.g. "-x" (stop at the first failure) or ' +
+                 '"--maxfail=2". Blank (default) = none')
 
 properties([
     parameters(jobParams),
@@ -197,11 +237,16 @@ def setupPython() {
 // Copy the ENVIRONMENT's .env into the workspace (the tests load it from the
 // repo root, common/config.py) and drop the last build's results, since the
 // workspace is reused between builds. Call inside withCredentials(ENV_FILE).
-// SESSION_COUNT and HIGH_THROUGHPUT_DURATION_S are appended to .env rather than
+// SESSION_COUNT, HIGH_THROUGHPUT_DURATION_S and the evidence switches
+// (SCREENSHOT_ALL_STEPS, CAPTURE_TEST_DATA) are appended to .env rather than
 // passed with withEnv, because .env is loaded with override=True and
 // python-dotenv keeps the last value.
 def prepareWorkspace() {
-    def overrides = ["RSTUDIO_SESSION_COUNT=${(params.SESSION_COUNT ?: '10').trim()}"]
+    def overrides = [
+        "RSTUDIO_SESSION_COUNT=${(params.SESSION_COUNT ?: '10').trim()}",
+        "EVIDENCE_SCREENSHOTS=${params.SCREENSHOT_ALL_STEPS?.toString() == 'true' ? '1' : '0'}",
+        "EVIDENCE_TEST_DATA=${params.CAPTURE_TEST_DATA?.toString() == 'true' ? '1' : '0'}",
+    ]
     def htpDuration = (params.HIGH_THROUGHPUT_DURATION_S ?: '').trim()
     if (htpDuration) {
         overrides << "HIGH_THROUGHPUT_JOB_TEST_DURATION_SECONDS=${htpDuration}"
@@ -211,13 +256,14 @@ def prepareWorkspace() {
         // copy writable, since the overrides below are appended to it.
         sh 'rm -f .env && cp "$ENV_FILE" .env && chmod 600 .env'
         sh "printf '\\n%s\\n' ${overrides.collect { "'${it}'" }.join(' ')} >> .env"
-        sh "rm -rf evidence/junit*.xml evidence/rstudio_script_timings_*.png evidence/allure-results evidence/.login_slot.lock ${STOP_FILE} ${READY_FILE}"
+        sh "rm -rf evidence/junit*.xml evidence/*.png evidence/output_*evidence/allure-results evidence/.login_slot.lock ${STOP_FILE} ${READY_FILE}"
     } else {
         bat '(if exist .env del /F /Q .env) && copy /Y "%ENV_FILE%" .env && attrib -R .env'
         bat "(echo.${overrides.collect { "& echo ${it}" }.join('')})>> .env"
         bat '''
             if exist evidence\\junit*.xml del /F /Q evidence\\junit*.xml
-            if exist evidence\\rstudio_script_timings_*.png del /F /Q evidence\\rstudio_script_timings_*.png
+            if exist evidence\\*.png del /F /Q evidence\\*.png
+            if exist evidence\\output_* del /F /Q evidence\\output_*
             if exist evidence\\.login_slot.lock del /F /Q evidence\\.login_slot.lock
             if exist evidence\\.active_sessions_stop del /F /Q evidence\\.active_sessions_stop
             if exist evidence\\.active_sessions_ready del /F /Q evidence\\.active_sessions_ready
@@ -362,7 +408,7 @@ pipeline {
                             prepareWorkspace()
 
                             def kArg = params.PYTEST_K?.trim() ? "-k \"${params.PYTEST_K.trim()}\"" : ''
-                            def commonArgs = "-v ${kArg} ${params.HEADED?.toString() == 'true' ? '--headed' : ''} ${params.EXTRA_PYTEST_ARGS ?: ''} --alluredir=evidence/allure-results"
+                            def commonArgs = "-v ${kArg} ${params.HEADED?.toString() == 'true' ? '--headed' : ''} --screenshot only-on-failure ${params.EXTRA_PYTEST_ARGS ?: ''} --alluredir=evidence/allure-results"
                             def py = isUnix() ? '.venv/bin/python' : '.venv\\Scripts\\python.exe'
                             def selected = env.SELECTED_TESTS.split(',') as List
                             // Set in 'Select tests': empty unless USE_EC2_NODES is ticked.
@@ -579,9 +625,16 @@ pipeline {
     post {
         always {
             junit testResults: 'evidence/junit*.xml', allowEmptyResults: true
-            // Session time charts (common/session_time_report.py), not the screenshots.
-            archiveArtifacts artifacts: 'evidence/**/*.csv, evidence/**/*.json, evidence/rstudio_script_timings_*.png, testdata/session_ids_U*.csv, test-results/**',
-                             allowEmptyArchive: true
+            // Always: reports, timings, metrics and session time charts
+            // (common/session_time_report.py), and the failure screenshots of
+            // tests using the page fixture (test-results/); every screenshot is in Allure.
+            archiveArtifacts artifacts: 'evidence/**/*.csv, evidence/**/*.json, evidence/rstudio_script_timings_*.png, test-results/**',
+                             excludes: 'evidence/output_*', allowEmptyArchive: true
+            script {
+                if (params.CAPTURE_TEST_DATA?.toString() == 'true') {
+                    archiveArtifacts artifacts: 'evidence/output_*, testdata/session_ids_U*.csv', allowEmptyArchive: true
+                }
+            }
             script {
                 try {
                     allure results: [[path: 'evidence/allure-results']]
