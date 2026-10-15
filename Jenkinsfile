@@ -100,6 +100,11 @@ jobParams << booleanParam(name: 'CAPTURE_TEST_DATA', defaultValue: false,
                  'write (evidence/output_*, files up to 200 KB) and the created session id lists ' +
                  '(testdata/session_ids_U<user>.csv), attached to Allure and archived with the build. Unticked (default): ' +
                  'not kept (the id lists are still written for later tests, just not archived)')
+jobParams << booleanParam(name: 'DOWNLOAD_ALLURE_REPORT', defaultValue: true,
+    description: '[Browser and evidence] Ticked (default): the Allure report is also saved as one self-contained HTML file ' +
+                 '(allure-report.html under the build\'s Build Artifacts) that you can download and open in any browser, ' +
+                 'no Jenkins needed. Needs Allure 2.27+ as the "allure" tool (Manage Jenkins -> Tools). Unticked: only the ' +
+                 'Allure report inside Jenkins')
 // --- How tests run ---
 jobParams << booleanParam(name: 'RUN_IN_PARALLEL', defaultValue: false,
     description: '[How tests run] Ticked: the ticked test files start at the same time, each in its own pytest (one ' +
@@ -181,6 +186,13 @@ jobParams << string(name: 'PYTEST_K', defaultValue: '',
 jobParams << string(name: 'EXTRA_PYTEST_ARGS', defaultValue: '',
     description: '[pytest] Optional: extra arguments added to the pytest command, e.g. "-x" (stop at the first failure) or ' +
                  '"--maxfail=2". Blank (default) = none')
+
+// --- Email ---
+jobParams << string(name: 'EMAIL_TO', defaultValue: 'mayur.kumar@fissionlabs.com',
+    description: '[Email] Optional: addresses that get the result email when the build ends (pass or fail), separated by ' +
+                 'commas, e.g. "a@company.com, b@company.com". The email has the status, the tests run, links to the ' +
+                 'Allure report and the console, and allure-report.html attached (if DOWNLOAD_ALLURE_REPORT is ticked). ' +
+                 'Blank = no email. Needs the Email Extension plugin with SMTP set up (Manage Jenkins -> System)')
 
 properties([
     parameters(jobParams),
@@ -270,6 +282,77 @@ def prepareWorkspace() {
             if exist evidence\\allure-results rmdir /S /Q evidence\\allure-results
             exit /b 0
         '''
+    }
+}
+
+// Builds the Allure report as one self-contained allure-report.html (opens from
+// disk, no web server needed) and archives it for download. Uses the Allure
+// Commandline tool named 'allure' (Manage Jenkins -> Tools); --single-file
+// needs Allure 2.27+. Never fails the build.
+def downloadableAllureReport() {
+    if (!fileExists('evidence/allure-results')) {
+        echo 'No Allure results - no downloadable Allure report'
+        return
+    }
+    try {
+        def allureHome = tool name: 'allure'
+        if (isUnix()) {
+            sh """
+                rm -rf allure-report-single allure-report.html
+                "${allureHome}/bin/allure" generate --single-file evidence/allure-results --clean -o allure-report-single
+                mv allure-report-single/index.html allure-report.html
+            """
+        } else {
+            bat """
+                if exist allure-report-single rmdir /S /Q allure-report-single
+                if exist allure-report.html del /F /Q allure-report.html
+                call "${allureHome}\\bin\\allure.bat" generate --single-file evidence\\allure-results --clean -o allure-report-single
+                move /Y allure-report-single\\index.html allure-report.html
+            """
+        }
+        archiveArtifacts artifacts: 'allure-report.html', fingerprint: true
+        echo 'Downloadable Allure report: Build Artifacts -> allure-report.html'
+    } catch (Exception e) {
+        echo "Downloadable Allure report skipped (is the 'allure' tool Allure 2.27+?): ${e.message}"
+    }
+}
+
+// Emails the build result to EMAIL_TO (Email Extension plugin, SMTP set up in
+// Manage Jenkins -> System -> Extended E-mail Notification), with
+// allure-report.html attached when it was built. Never fails the build.
+def sendResultEmail() {
+    def to = (params.EMAIL_TO ?: '').trim()
+    if (!to) {
+        echo 'EMAIL_TO is blank - no result email'
+        return
+    }
+    def status = currentBuild.currentResult
+    def tests = (env.SELECTED_TESTS ?: '').split(',').findAll { it }
+    def hasReport = fileExists('allure-report.html')
+    def body = """\
+        <p><b>${env.JOB_NAME} #${env.BUILD_NUMBER}: ${status}</b>
+           (${params.ENVIRONMENT}, took ${currentBuild.durationString.replace(' and counting', '')})</p>
+        <p>Tests run:<br>${tests ? tests.join('<br>') : '(none - the build stopped before the tests)'}</p>
+        <p><a href="${env.BUILD_URL}allure/">Allure report</a> |
+           <a href="${env.BUILD_URL}testReport/">Test results</a> |
+           <a href="${env.BUILD_URL}console">Console log</a> |
+           <a href="${env.BUILD_URL}artifact/">Build artifacts</a></p>
+        <p>${hasReport ? 'The full Allure report is attached (allure-report.html) - download it and open it in any browser.'
+                       : 'No allure-report.html this time (DOWNLOAD_ALLURE_REPORT unticked or the report could not be built).'}</p>
+    """.stripIndent()
+    try {
+        emailext(
+            to: to,
+            subject: "[${status}] ${env.JOB_NAME} #${env.BUILD_NUMBER} - ${params.ENVIRONMENT} test report",
+            body: body,
+            mimeType: 'text/html',
+            attachmentsPattern: hasReport ? 'allure-report.html' : '',
+        )
+        echo "Result email sent to ${to}"
+    } catch (NoSuchMethodError ignored) {
+        echo 'Email Extension plugin not installed - no result email'
+    } catch (Exception e) {
+        echo "Result email not sent: ${e.message}"
     }
 }
 
@@ -650,6 +733,12 @@ pipeline {
                     echo "Allure report skipped: ${e.message}"
                 }
             }
+            script {
+                if (params.DOWNLOAD_ALLURE_REPORT?.toString() != 'false') {
+                    downloadableAllureReport()
+                }
+            }
+            script { sendResultEmail() }
             script { removeEnvFile() }
         }
     }
