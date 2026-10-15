@@ -35,6 +35,8 @@ TEST_FILES = [
         'start once it has (it runs alongside them), and it stops when they all finish or after ACTIVE_SESSIONS_MONITOR_S (20 min)',
     'test_create_sessions_run_r_close_browser'            : 'Scripts and Workbench jobs keep running after the tab closes',
     'test_167'                                            : 'US 167 - high-throughput script, timed',
+    'test_167_multiple_times'                             :
+        'US 167 - the test_167 run repeated HTP_REPEAT_RUNS times, HTP_REPEAT_WAIT_S seconds apart',
     'test_168'                                            : 'US 168 - high-throughput script, timed',
     'test_launch_sessions_api_user1'                      : 'Create / relaunch sessions through the API only',
     'test_create_session_through_api_and_run_script'      : 'API-created sessions driven in the browser',
@@ -103,7 +105,7 @@ jobParams << booleanParam(name: 'CAPTURE_TEST_DATA', defaultValue: false,
 jobParams << booleanParam(name: 'DOWNLOAD_ALLURE_REPORT', defaultValue: true,
     description: '[Browser and evidence] Ticked (default): the Allure report is also saved as one self-contained HTML file ' +
                  '(allure-report.html under the build\'s Build Artifacts) that you can download and open in any browser, ' +
-                 'no Jenkins needed. Needs Allure 2.27+ as the "allure" tool (Manage Jenkins -> Tools). Unticked: only the ' +
+                 'no Jenkins needed (the pipeline downloads the Allure command line for it). Unticked: only the ' +
                  'Allure report inside Jenkins')
 // --- How tests run ---
 jobParams << booleanParam(name: 'RUN_IN_PARALLEL', defaultValue: false,
@@ -167,6 +169,12 @@ jobParams << string(name: 'HIGH_THROUGHPUT_DURATION_S', defaultValue: '',
     description: '[Other tests] test_167 / test_168: seconds each high-throughput script run may take before it counts as ' +
                  'failed. Whole number, at least 1. Blank (default) = HIGH_THROUGHPUT_JOB_TEST_DURATION_SECONDS from .env ' +
                  '(180 if not set there)')
+jobParams << string(name: 'HTP_REPEAT_RUNS', defaultValue: '3',
+    description: '[Other tests] test_167_multiple_times: how many times the test_167 run is repeated, one after another ' +
+                 '(a new session each time). Whole number, at least 1. Default: 3')
+jobParams << string(name: 'HTP_REPEAT_WAIT_S', defaultValue: '30',
+    description: '[Other tests] test_167_multiple_times: seconds to wait before each run after the first. ' +
+                 'Whole number, 0 or more. Default: 30')
 jobParams << string(name: 'CLOSE_BROWSER_WAIT_S', defaultValue: '',
     description: '[Other tests] test_create_sessions_run_r_close_browser: seconds the sessions keep running with their tabs ' +
                  'closed before they are quit. Whole number. Blank (default) = RSTUDIO_WORKBENCH_JOB_TEST_DURATION_SECONDS ' +
@@ -285,35 +293,56 @@ def prepareWorkspace() {
     }
 }
 
+// Allure command line used for allure-report.html: downloaded once from Maven
+// Central into the workspace (.allure-cli/), so the report does not depend on
+// the version of the Jenkins 'allure' tool (--single-file needs 2.27+).
+ALLURE_CLI_VERSION = '2.34.0'
+
 // Builds the Allure report as one self-contained allure-report.html (opens from
-// disk, no web server needed) and archives it for download. Uses the Allure
-// Commandline tool named 'allure' (Manage Jenkins -> Tools); --single-file
-// needs Allure 2.27+. Never fails the build.
+// disk, no web server needed) and archives it for download (Build Artifacts).
+// Needs Java and curl on the agent. Never fails the build.
 def downloadableAllureReport() {
     if (!fileExists('evidence/allure-results')) {
         echo 'No Allure results - no downloadable Allure report'
         return
     }
+    def v = ALLURE_CLI_VERSION
+    def url = "https://repo1.maven.org/maven2/io/qameta/allure/allure-commandline/${v}/allure-commandline-${v}.zip"
+    // Any Python unzips it (python -m zipfile); the venv's if the build got that far.
+    def py = isUnix() ? (fileExists('.venv/bin/python') ? '.venv/bin/python' : 'python3')
+                      : (fileExists('.venv\\Scripts\\python.exe') ? '.venv\\Scripts\\python.exe' : 'python')
     try {
-        def allureHome = tool name: 'allure'
         if (isUnix()) {
             sh """
+                set -e
+                if [ ! -f .allure-cli/allure-${v}/bin/allure ]; then
+                    rm -rf .allure-cli && mkdir -p .allure-cli
+                    curl -fsSL -o .allure-cli/allure.zip "${url}"
+                    ${py} -m zipfile -e .allure-cli/allure.zip .allure-cli
+                fi
                 rm -rf allure-report-single allure-report.html
-                "${allureHome}/bin/allure" generate --single-file evidence/allure-results --clean -o allure-report-single
+                # zipfile drops the exec bit, so run the launcher through sh
+                sh .allure-cli/allure-${v}/bin/allure generate --single-file evidence/allure-results --clean -o allure-report-single
                 mv allure-report-single/index.html allure-report.html
             """
         } else {
             bat """
+                if not exist .allure-cli\\allure-${v}\\bin\\allure.bat (
+                    if exist .allure-cli rmdir /S /Q .allure-cli
+                    mkdir .allure-cli
+                    curl.exe -fsSL -o .allure-cli\\allure.zip "${url}" || exit /b 1
+                    ${py} -m zipfile -e .allure-cli\\allure.zip .allure-cli || exit /b 1
+                )
                 if exist allure-report-single rmdir /S /Q allure-report-single
                 if exist allure-report.html del /F /Q allure-report.html
-                call "${allureHome}\\bin\\allure.bat" generate --single-file evidence\\allure-results --clean -o allure-report-single
+                call .allure-cli\\allure-${v}\\bin\\allure.bat generate --single-file evidence\\allure-results --clean -o allure-report-single || exit /b 1
                 move /Y allure-report-single\\index.html allure-report.html
             """
         }
         archiveArtifacts artifacts: 'allure-report.html', fingerprint: true
         echo 'Downloadable Allure report: Build Artifacts -> allure-report.html'
     } catch (Exception e) {
-        echo "Downloadable Allure report skipped (is the 'allure' tool Allure 2.27+?): ${e.message}"
+        echo "Downloadable Allure report not built: ${e.message}"
     }
 }
 
@@ -425,8 +454,10 @@ pipeline {
                     if (threshold && !(threshold ==~ /\d+(\.\d+)?/)) {
                         error("SESSION_TIME_THRESHOLD_S must be blank or a number of seconds, got '${params.SESSION_TIME_THRESHOLD_S}'")
                     }
-                    def atLeastOne = ['UI_BROWSERS', 'SESSION_COUNT', 'CONCURRENT_SESSIONS', 'CONCURRENT_10MIN_SESSIONS', 'CONCURRENT_30MIN_SESSIONS']
+                    def atLeastOne = ['UI_BROWSERS', 'SESSION_COUNT', 'CONCURRENT_SESSIONS', 'CONCURRENT_10MIN_SESSIONS', 'CONCURRENT_30MIN_SESSIONS',
+                                      'HTP_REPEAT_RUNS']
                     ['UI_BROWSERS', 'SESSION_COUNT', 'CONCURRENT_SESSIONS', 'CONCURRENT_10MIN_SESSIONS', 'CONCURRENT_30MIN_SESSIONS',
+                     'HTP_REPEAT_RUNS', 'HTP_REPEAT_WAIT_S',
                      'UI_BROWSER_STAGGER_S', 'PARALLEL_LOGIN_GAP_S', 'GROUP_TEST_DURATION_S',
                      'ACTIVE_SESSIONS_MONITOR_S', 'NODE_START_OFFSET_S'].each { name ->
                         if (params[name] == null) {
@@ -485,6 +516,8 @@ pipeline {
                     "CONCURRENT_SESSIONS_THRESHOLD_S=${(params.SESSION_TIME_THRESHOLD_S ?: '').trim()}",
                     "CONCURRENT_10MIN_THRESHOLD_S=${(params.SESSION_TIME_THRESHOLD_S ?: '').trim()}",
                     "CONCURRENT_30MIN_THRESHOLD_S=${(params.SESSION_TIME_THRESHOLD_S ?: '').trim()}",
+                    "HTP_REPEAT_RUNS=${(params.HTP_REPEAT_RUNS ?: '3').trim()}",
+                    "HTP_REPEAT_WAIT_S=${(params.HTP_REPEAT_WAIT_S ?: '30').trim()}",
                 ]) {
                     withCredentials([file(credentialsId: "cape-nft-env-${params.ENVIRONMENT.toLowerCase()}", variable: 'ENV_FILE')]) {
                         script {

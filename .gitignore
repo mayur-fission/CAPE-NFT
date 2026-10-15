@@ -24,3 +24,8 @@ testdata/session_projects_U*.xlsx
 .idea/
 .DS_Store
 Thumbs.db
+
+# Allure command line the Jenkinsfile downloads, and the report it builds
+.allure-cli/
+allure-report-single/
+allure-report.html
