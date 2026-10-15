@@ -256,7 +256,7 @@ def prepareWorkspace() {
         // copy writable, since the overrides below are appended to it.
         sh 'rm -f .env && cp "$ENV_FILE" .env && chmod 600 .env'
         sh "printf '\\n%s\\n' ${overrides.collect { "'${it}'" }.join(' ')} >> .env"
-        sh "rm -rf evidence/junit*.xml evidence/*.png evidence/output_*evidence/allure-results evidence/.login_slot.lock ${STOP_FILE} ${READY_FILE}"
+        sh "rm -rf evidence/junit*.xml evidence/*.png evidence/output_* evidence/allure-results evidence/.login_slot.lock ${STOP_FILE} ${READY_FILE}"
     } else {
         bat '(if exist .env del /F /Q .env) && copy /Y "%ENV_FILE%" .env && attrib -R .env'
         bat "(echo.${overrides.collect { "& echo ${it}" }.join('')})>> .env"
@@ -410,7 +410,12 @@ pipeline {
                             def kArg = params.PYTEST_K?.trim() ? "-k \"${params.PYTEST_K.trim()}\"" : ''
                             def commonArgs = "-v ${kArg} ${params.HEADED?.toString() == 'true' ? '--headed' : ''} --screenshot only-on-failure ${params.EXTRA_PYTEST_ARGS ?: ''} --alluredir=evidence/allure-results"
                             def py = isUnix() ? '.venv/bin/python' : '.venv\\Scripts\\python.exe'
-                            def selected = env.SELECTED_TESTS.split(',') as List
+                            def selected = (env.SELECTED_TESTS ?: '').split(',').findAll { it } as List
+                            // pytest with no file paths falls back to pytest.ini testpaths and runs
+                            // every test, so never start it without the ticked files.
+                            if (!selected || !env.TEST_PATHS?.trim()) {
+                                error('No test files selected - refusing to start pytest, it would run every test in tests/')
+                            }
                             // Set in 'Select tests': empty unless USE_EC2_NODES is ticked.
                             def nodeLabels = (env.RUN_NODE_LABELS ?: '').split(',').findAll { it }
                             // With USE_EC2_NODES the multi-browser test runs on those agents instead of here.
