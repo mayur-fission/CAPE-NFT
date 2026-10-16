@@ -3,6 +3,8 @@ instance was left as the test found it.
 """
 import time
 
+from common.evidence import save_screenshot
+
 from common.rstudio_session_helper import (
     AUTOMATION_NAME_PREFIXES,
     bulk_quit_sessions,
@@ -14,34 +16,55 @@ from common.rstudio_session_helper import (
 )
 
 
-def cleanup_multiple_sessions(page, ids, timeout_ms=8000, poll_interval_ms=300, max_attempts=3):
-    """Bulk-quit the session rows `ids`, wait for them to disappear, then
-    force-quit any stragglers one at a time, up to max_attempts each. Never
-    raises - check row_ids() afterwards to see what's left.
+def cleanup_multiple_sessions(page, ids, timeout_ms=8000, poll_interval_ms=300, max_attempts=3,
+                              bulk_timeout_ms=60000, reload_every_ms=10000):
+    """Bulk-quit the session rows `ids`, wait up to bulk_timeout_ms for them
+    to disappear (reloading the list every reload_every_ms, in case it does
+    not refresh itself), then force-quit any stragglers one at a time, up to
+    max_attempts each. Never raises - check row_ids() afterwards to see
+    what's left.
     """
     ids = set(ids)
     if not ids:
         return
 
+    checked = set()
     try:
-        bulk_quit_sessions(page, ids)
+        checked = bulk_quit_sessions(page, ids)
     except Exception as exc:
         print("[rstudio-local] cleanup: bulk quit failed: %s" % exc)
 
-    def _wait_until_gone(wanted):
-        deadline = time.time() + timeout_ms / 1000.0
+    def _wait_until_gone(wanted, wait_ms, reload_ms=None):
+        started = time.time()
+        deadline = started + wait_ms / 1000.0
+        next_reload = started + reload_ms / 1000.0 if reload_ms else None
         while time.time() < deadline and (wanted & row_ids(page)):
+            if next_reload and time.time() >= next_reload:
+                try:
+                    page.reload()
+                    page.wait_for_timeout(2000)
+                except Exception:
+                    pass
+                next_reload = time.time() + reload_ms / 1000.0
             page.wait_for_timeout(poll_interval_ms)
         return wanted & row_ids(page)
 
-    for row_id in _wait_until_gone(ids):
+    if checked:
+        started = time.time()
+        left = _wait_until_gone(checked, bulk_timeout_ms, reload_every_ms)
+        print("[rstudio-local] cleanup: %d of %d bulk-quit session(s) gone after %.1fs"
+              % (len(checked) - len(left), len(checked), time.time() - started))
+        if left:
+            save_screenshot(page, "bulk_quit_sessions_left", always=True)
+
+    for row_id in _wait_until_gone(ids, timeout_ms):
         print("[rstudio-local] cleanup: %s still listed after the bulk quit, force-quitting it on its own" % row_id)
         for attempt in range(max_attempts):
             try:
                 quit_session(page, row_id)
             except Exception:
                 pass
-            if not _wait_until_gone({row_id}):
+            if not _wait_until_gone({row_id}, timeout_ms):
                 break
             if attempt + 1 < max_attempts:
                 print(

@@ -61,7 +61,13 @@ REMOVE_LINK_TEXT = "Remove"
 # "Quit All" is excluded, since it quits every session.
 SESSION_ROW_CHECKBOX_ROLE = "checkbox"
 SESSION_ROW_CHECKBOX_NAME = None
-BULK_QUIT_BUTTON = "xpath=//button[contains(normalize-space(.), 'Quit') and not(contains(., 'All'))]"
+# Fallback when the checkbox has no accessible checkbox role
+SESSION_ROW_CHECKBOX_XPATH = "xpath=.//input[@type='checkbox']"
+# visible=true: skip hidden buttons/menu items that also contain "Quit"
+BULK_QUIT_BUTTON = "xpath=//button[contains(normalize-space(.), 'Quit') and not(contains(., 'All'))] >> visible=true"
+# Newer Workbench versions may ask to confirm the bulk Quit; the dialog's
+# button whose name contains this is clicked
+BULK_QUIT_CONFIRM_BUTTON = "Quit"
 
 # --- File menu / New Project Wizard (create_project_from_existing_directory())
 FILE_MENU_SELECTOR = "#rstudio_label_file_menu"

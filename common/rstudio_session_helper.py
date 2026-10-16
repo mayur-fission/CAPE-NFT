@@ -296,8 +296,8 @@ def quit_session(page, row_id):
 
 
 def bulk_quit_sessions(page, row_ids):
-    """Check each row's checkbox and click the scoped "Quit" button once
-    (no confirmation dialog). Rows without a checkbox fall back to
+    """Check each row's checkbox and click the scoped "Quit" button once,
+    confirming the dialog if one opens. Rows without a checkbox fall back to
     quit_session(); rows that have already gone are skipped.
 
     Returns the row ids that were checked - the caller confirms removal.
@@ -310,6 +310,8 @@ def bulk_quit_sessions(page, row_ids):
 
         checkbox = row.get_by_role(locators.SESSION_ROW_CHECKBOX_ROLE, name=locators.SESSION_ROW_CHECKBOX_NAME)
         if checkbox.count() == 0:
+            checkbox = row.locator(locators.SESSION_ROW_CHECKBOX_XPATH)
+        if checkbox.count() == 0:
             # e.g. a stub/failed-launch row - quit it on its own
             print("[rstudio-local] cleanup: %s has no checkbox, quitting it on its own" % row_id)
             try:
@@ -319,11 +321,16 @@ def bulk_quit_sessions(page, row_ids):
             continue
 
         try:
-            checkbox.first.check()
+            checkbox.first.check(timeout=5000)
             checked.add(row_id)
         except Exception as exc:
-            # don't let one bad checkbox stall the batch
-            print("[rstudio-local] cleanup: could not check the checkbox of %s: %s" % (row_id, exc))
+            # A styled checkbox can be covered by its label: click it directly
+            try:
+                checkbox.first.click(force=True, timeout=5000)
+                checked.add(row_id)
+            except Exception:
+                # don't let one bad checkbox stall the batch
+                print("[rstudio-local] cleanup: could not check the checkbox of %s: %s" % (row_id, exc))
 
     if checked:
         quit_button = page.locator(locators.BULK_QUIT_BUTTON)
@@ -331,7 +338,7 @@ def bulk_quit_sessions(page, row_ids):
             print("[rstudio-local] cleanup: Quit button not found - %d checked session(s) not bulk-quit" % len(checked))
             save_screenshot(page, "bulk_quit_button_missing", always=True)
             return set()
-        quit_button.first.click()
+        _click_and_confirm(page, quit_button.first.click, locators.BULK_QUIT_CONFIRM_BUTTON, timeout_ms=3000)
         print("[rstudio-local] cleanup: checked %d session(s) and clicked Quit once: %s"
               % (len(checked), ", ".join(sorted(checked))))
     return checked
