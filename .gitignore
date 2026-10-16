@@ -7,6 +7,7 @@ __pycache__/
 # Secrets
 .env
 .env.*
+!.env.example
 
 # Test output: Allure results/report, timing CSVs, perf JSON, Prometheus
 # config/data/logs (all under evidence/), plus pytest-playwright traces
