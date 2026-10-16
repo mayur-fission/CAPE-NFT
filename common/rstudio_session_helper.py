@@ -311,6 +311,7 @@ def bulk_quit_sessions(page, row_ids):
         checkbox = row.get_by_role(locators.SESSION_ROW_CHECKBOX_ROLE, name=locators.SESSION_ROW_CHECKBOX_NAME)
         if checkbox.count() == 0:
             # e.g. a stub/failed-launch row - quit it on its own
+            print("[rstudio-local] cleanup: %s has no checkbox, quitting it on its own" % row_id)
             try:
                 quit_session(page, row_id)
             except Exception:
@@ -320,11 +321,17 @@ def bulk_quit_sessions(page, row_ids):
         try:
             checkbox.first.check()
             checked.add(row_id)
-        except Exception:
-            pass  # don't let one bad checkbox stall the batch
+        except Exception as exc:
+            # don't let one bad checkbox stall the batch
+            print("[rstudio-local] cleanup: could not check the checkbox of %s: %s" % (row_id, exc))
 
     if checked:
         quit_button = page.locator(locators.BULK_QUIT_BUTTON)
-        if quit_button.count() > 0:
-            quit_button.first.click()
+        if quit_button.count() == 0:
+            print("[rstudio-local] cleanup: Quit button not found - %d checked session(s) not bulk-quit" % len(checked))
+            save_screenshot(page, "bulk_quit_button_missing", always=True)
+            return set()
+        quit_button.first.click()
+        print("[rstudio-local] cleanup: checked %d session(s) and clicked Quit once: %s"
+              % (len(checked), ", ".join(sorted(checked))))
     return checked

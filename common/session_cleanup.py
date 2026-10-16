@@ -25,8 +25,8 @@ def cleanup_multiple_sessions(page, ids, timeout_ms=8000, poll_interval_ms=300, 
 
     try:
         bulk_quit_sessions(page, ids)
-    except Exception:
-        pass
+    except Exception as exc:
+        print("[rstudio-local] cleanup: bulk quit failed: %s" % exc)
 
     def _wait_until_gone(wanted):
         deadline = time.time() + timeout_ms / 1000.0
@@ -35,6 +35,7 @@ def cleanup_multiple_sessions(page, ids, timeout_ms=8000, poll_interval_ms=300, 
         return wanted & row_ids(page)
 
     for row_id in _wait_until_gone(ids):
+        print("[rstudio-local] cleanup: %s still listed after the bulk quit, force-quitting it on its own" % row_id)
         for attempt in range(max_attempts):
             try:
                 quit_session(page, row_id)
