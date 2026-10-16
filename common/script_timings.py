@@ -146,10 +146,17 @@ def wait_for_console_runs(pending, timeout_ms, poll_interval_ms=500, on_done=Non
     command finishes / times out (on_done may set an error status, e.g. for
     a missing output file); a command that stops with an R error ends as
     "R error: <message>" straight away; on_poll() runs once per round - keep it quick.
-    Each console is screenshotted when its command finishes
+    Each console is screenshotted after its command finishes
     (console_output_<session name>.png, before on_done) or times out
     (console_timeout_<session name>.png). With `what` (e.g. "R script
     x.R"), each finish, R error and timeout is logged with log_step().
+
+    The polling loop only checks consoles and records end times; the
+    screenshots and on_done/on_timeout run once every command has finished
+    or timed out. Doing them in the loop (seconds each, e.g. checking and
+    deleting an output file) would delay checking the other tabs of the
+    browser, so each later tab's end time - and its "time taken" - would
+    grow by the time spent on the tabs before it.
 
     A tab whose renderer crashes (e.g. the browser host ran out of memory)
     is reopened up to CONSOLE_TAB_CRASH_REOPENS times and checked again -
@@ -159,6 +166,8 @@ def wait_for_console_runs(pending, timeout_ms, poll_interval_ms=500, on_done=Non
     """
     what_ = what or "The command"
     pending = list(pending)
+    finished = []  # (page, record, context) of finished commands, handled after the loop
+    timed_out = []
     while pending:
         for item in list(pending):
             page, marker, record, context = item
@@ -194,20 +203,25 @@ def wait_for_console_runs(pending, timeout_ms, poll_interval_ms=500, on_done=Non
                 if what:
                     log_step("%s finished execution in session %s in %.2fs", what, name,
                              record["ended"] - record["started"])
-                save_screenshot(page, "console_output_%s.png" % name)
-                if on_done:
-                    on_done(page, record, context)
+                finished.append((page, record, context))
             elif time.time() - record["started"] >= timeout_ms / 1000.0:
                 record["status"] = "timed out"
                 log_step("%s timed out in session %s after %.0fs", what_, name, timeout_ms / 1000.0)
                 pending.remove(item)
-                save_screenshot(page, "console_timeout_%s.png" % record["session_name"], always=True)
-                if on_timeout:
-                    on_timeout(page, record, context)
+                timed_out.append((page, record, context))
         if on_poll:
             on_poll()
         if pending:
             pending[0][0].wait_for_timeout(poll_interval_ms)
+
+    for page, record, context in finished:
+        save_screenshot(page, "console_output_%s.png" % record["session_name"])
+        if on_done:
+            on_done(page, record, context)
+    for page, record, context in timed_out:
+        save_screenshot(page, "console_timeout_%s.png" % record["session_name"], always=True)
+        if on_timeout:
+            on_timeout(page, record, context)
 
 
 def _format_timestamp(epoch_s):
