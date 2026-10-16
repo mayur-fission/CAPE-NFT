@@ -4,7 +4,7 @@ option parsing. `label` (e.g. "user1") only prefixes printed progress lines.
 """
 from common.cloudwatch_metrics import capture_db_metrics, capture_server_metrics
 from common.evidence import save_screenshot
-from common.rstudio_session_helper import goto_session_list, next_session_names, row_ids
+from common.rstudio_session_helper import goto_session_list, load_all_session_rows, next_session_names, row_ids
 from common.script_timings import (
     new_run_record,
     run_timed_console_command,
@@ -34,6 +34,7 @@ def login_and_snapshot(page, user=1):
     Returns (home_url, before_ids).
     """
     home_url = login_to_posit_workbench(page, user=user)
+    load_all_session_rows(page)
     return home_url, row_ids(page)
 
 

@@ -52,6 +52,8 @@ TEST_FILES = [
         'CONCURRENT_10MIN_SESSIONS UI-created sessions run the ~10 minute R script (htp_10min.R) at once, timed, with charts',
     'test_concurrent_sessions_30min'                      :
         'CONCURRENT_30MIN_SESSIONS UI-created sessions run the ~30 minute R script (htp_30min.R) at once, timed, with charts',
+    'test_delete_sessions'                                :
+        'Housekeeping: quit every AUTO_PERF_SESSION_* session (bulk Quit) - also ones another running test is using',
 ]
 TEST_NAMES = new ArrayList(TEST_FILES.keySet())
 // The test USE_EC2_NODES spreads over the NODE_LABELS agents.
