@@ -166,10 +166,20 @@ def is_session_alive(page):
     return page.get_by_text(locators.CONSOLE_TAB_TEXT, exact=True).first.count() > 0
 
 
-def load_all_session_rows(page, max_scrolls=60, poll_interval_ms=500):
+def load_all_session_rows(page, max_scrolls=60, poll_interval_ms=1000, first_row_timeout_ms=20000):
     """Scroll the session list (the window and any scrolling container) to
     the bottom until the row count stops growing, so long lists that render
-    rows lazily have them all in the page. Returns the row count."""
+    rows lazily have them all in the page. Returns the row count.
+
+    A long list (e.g. 200 sessions) can take several seconds to show its
+    first row, so it first waits up to first_row_timeout_ms for one (an
+    empty list costs that wait).
+    """
+    try:
+        page.locator(locators.SESSION_STATUS_CELL_SELECTOR).first.wait_for(
+            state="attached", timeout=first_row_timeout_ms)
+    except Exception:
+        return 0  # no sessions listed
     count, stable = len(row_ids(page)), 0
     for _ in range(max_scrolls):
         page.evaluate("""() => {
@@ -184,7 +194,7 @@ def load_all_session_rows(page, max_scrolls=60, poll_interval_ms=500):
         new_count = len(row_ids(page))
         stable = stable + 1 if new_count == count else 0
         count = new_count
-        if stable >= 2:
+        if stable >= 3:
             break
     page.evaluate("() => window.scrollTo(0, 0)")
     return count
