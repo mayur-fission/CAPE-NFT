@@ -9,7 +9,7 @@ import os
 import pytest
 
 from common.api_helper import launch_sessions_from_csv, session_names_csv_path
-from common.config import env
+from common.config import env, env_path
 from common.script_run_scenarios import run_script_in_existing_sessions_scenario
 
 pytestmark = pytest.mark.rstudio_local
@@ -17,8 +17,8 @@ pytestmark = pytest.mark.rstudio_local
 CSV_SESSIONS_USER = int(env("CSV_SESSIONS_USER", "1"))
 SESSION_NAMES_CSV = env("CSV_SESSIONS_NAMES_CSV", session_names_csv_path(CSV_SESSIONS_USER))
 TIMINGS_LABEL = "new_api_sessions_U%d" % CSV_SESSIONS_USER
-SCRIPT_PATH = env("CSV_SESSIONS_SCRIPT", "/home/posit/batch_mayur/generate_10kb_csv.R")
-OUTPUT_DIR = env("CSV_SESSIONS_OUTPUT_DIR", "/home/posit")
+SCRIPT_PATH = env_path("R_SCRIPT_GENERATE_CSV", "CSV_SESSIONS_SCRIPT")
+OUTPUT_DIR = env_path("OUTPUT_DIR_GENERATE_CSV", "CSV_SESSIONS_OUTPUT_DIR")
 OUTPUT_FILE_NAME = "generated_data_10kb.csv"
 SCRIPT_TIMEOUT_MS = int(env("HIGH_THROUGHPUT_JOB_TIMEOUT_MS", "1800000"))
 

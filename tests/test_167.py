@@ -5,15 +5,14 @@ OUTPUT_DIR (deleted afterwards). The session is force-quit afterwards.
 """
 import pytest
 
-from common.config import env
-from common.rstudio_workbenchjob import DEFAULT_WORKBENCH_JOB_SCRIPT
+from common.config import env, env_path
 from common.script_run_scenarios import run_script_in_new_sessions_scenario
 
 pytestmark = pytest.mark.rstudio_local
 
-HTP_SCRIPT_PATH = env("HIGH_THROUGHPUT_JOB_SCRIPT", DEFAULT_WORKBENCH_JOB_SCRIPT)
+HTP_SCRIPT_PATH = env_path("R_SCRIPT_HIGH_THROUGHPUT", "HIGH_THROUGHPUT_JOB_SCRIPT")
 TEST_DURATION_SECONDS = float(env("HIGH_THROUGHPUT_JOB_TEST_DURATION_SECONDS", "180"))
-OUTPUT_DIR = env("HIGH_THROUGHPUT_JOB_OUTPUT_DIR", "/home/posit")
+OUTPUT_DIR = env_path("OUTPUT_DIR_HIGH_THROUGHPUT", "HIGH_THROUGHPUT_JOB_OUTPUT_DIR")
 OUTPUT_FILE_NAME = "generated_data_10kb.csv"
 # Own name prefix, so this test can run at the same time as the other
 # high-throughput tests (see run_script_in_new_sessions_scenario()).

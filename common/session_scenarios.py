@@ -9,7 +9,7 @@ from collections import namedtuple
 
 from config.perf_report import allure_step
 
-from common.config import default_session_count, env
+from common.config import default_session_count, env, env_path
 from common.rstudio_session_helper import (
     RUN_R_SESSION_NAME_PREFIX,
     goto_session_list,
@@ -154,8 +154,8 @@ def next_run_r_session_names(page, count, home_url=None):
 
 
 def default_run_script_command():
-    """RSTUDIO_RUN_SCRIPT_SOURCE_COMMAND (default source('sample_10mb.R'))."""
-    return env("RSTUDIO_RUN_SCRIPT_SOURCE_COMMAND", "source('sample_10mb.R')")
+    """R_SOURCE_COMMAND_NEW_SESSIONS from .env (no default)."""
+    return env_path("R_SOURCE_COMMAND_NEW_SESSIONS", "RSTUDIO_RUN_SCRIPT_SOURCE_COMMAND")
 
 
 def default_run_script_timeout_ms():

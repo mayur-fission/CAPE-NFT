@@ -27,7 +27,6 @@ from common.session_actions import (
     set_session_working_directory,
 )
 
-DEFAULT_WORKBENCH_JOB_SCRIPT = "/home/posit/sample_run_sleep.R"
 
 def open_workbench_jobs_tab(page, timeout_ms=10000):
     """Click the Workbench Jobs tab next to the Console."""
@@ -223,7 +222,7 @@ def _click_start(page, dialog, timeout_ms, attempts=3):
             page.wait_for_timeout(1000)
 
 
-def start_workbench_job(page, script_path=DEFAULT_WORKBENCH_JOB_SCRIPT, timeout_ms=30000):
+def start_workbench_job(page, script_path, timeout_ms=30000):
     """In an open session IDE: open `script_path` in the editor (which
     pre-fills the dialog's read-only R Script box), then Workbench Jobs >
     Start Workbench Job > Environment > Start.
@@ -256,7 +255,7 @@ def start_workbench_job(page, script_path=DEFAULT_WORKBENCH_JOB_SCRIPT, timeout_
     return job_name, time.time() - started
 
 
-def launch_sessions_and_start_jobs(context, home_url, session_count, script_path=DEFAULT_WORKBENCH_JOB_SCRIPT):
+def launch_sessions_and_start_jobs(context, home_url, session_count, script_path):
     """Launch `session_count` new sessions, each in its own tab, start
     `script_path` as a Workbench job in each and close the tab as soon as the
     job has started. Returns the names of the sessions launched, including
@@ -301,7 +300,7 @@ def reopen_sessions_and_stop_jobs(page, home_url, session_names, job_name):
     return failures
 
 
-def launch_sessions_and_source_script(context, home_url, session_count, script_path=DEFAULT_WORKBENCH_JOB_SCRIPT,
+def launch_sessions_and_source_script(context, home_url, session_count, script_path,
                                       working_dir=None):
     """Launch `session_count` new sessions, each in its own tab, setwd to
     `working_dir` (default RSTUDIO_WORKING_DIR; skipped if neither is set),
@@ -422,7 +421,7 @@ def report_output_file(page, record, output_path):
               % (record["session_name"], output_path, size))
 
 
-def launch_sessions_and_run_script(context, home_url, session_count, script_path=DEFAULT_WORKBENCH_JOB_SCRIPT,
+def launch_sessions_and_run_script(context, home_url, session_count, script_path,
                                    working_dir=None, timeout_ms=1800000, poll_interval_ms=500, output_path=None,
                                    per_session_dir=False, delete_output=False, session_names=None):
     """Launch `session_count` new sessions (named `session_names` when given,

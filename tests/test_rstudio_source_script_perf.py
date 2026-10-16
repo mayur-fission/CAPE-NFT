@@ -3,11 +3,12 @@
 browser - and capture run time plus best-effort server/DB metrics.
 
 Every session named must already be on the session list, with the sourced
-script (default sample_10mb.R) in WORKING_DIR; nothing is created.
+script (R_SOURCE_COMMAND_EXISTING_SESSIONS in .env) in WORKING_DIR; nothing
+is created.
 """
 import pytest
 
-from common.config import env, env_list
+from common.config import env, env_list, env_path
 from common.helper_function import (
     capture_server_and_db_metrics,
     describe_script_runs,
@@ -33,10 +34,10 @@ from common.session_concurrent import concurrent_source_script
 pytestmark = pytest.mark.rstudio_local
 
 SESSION_NAME = env("RSTUDIO_SCRIPT_SESSION_NAME", "AUTO_SESSION_1")
-SOURCE_COMMAND = env("RSTUDIO_SCRIPT_SOURCE_COMMAND", "source('sample_10mb.R')")
+SOURCE_COMMAND = env_path("R_SOURCE_COMMAND_EXISTING_SESSIONS", "RSTUDIO_SCRIPT_SOURCE_COMMAND")
 SCRIPT_TIMEOUT_MS = int(env("RSTUDIO_SCRIPT_TIMEOUT_MS", "300000"))
 METRICS_WINDOW_MINUTES = int(env("RSTUDIO_METRICS_WINDOW_MINUTES", "5"))
-WORKING_DIR = env("RSTUDIO_SCRIPT_WORKING_DIR", "/home/posit")
+WORKING_DIR = env_path("WORKING_DIR_EXISTING_SESSIONS", "RSTUDIO_SCRIPT_WORKING_DIR", "RSTUDIO_WORKING_DIR")
 
 # Concurrent variant: RSTUDIO_SCRIPT_SESSION_NAMES (comma-separated) overrides
 # the default AUTO_SESSION_1..RSTUDIO_CONCURRENT_USERS list.

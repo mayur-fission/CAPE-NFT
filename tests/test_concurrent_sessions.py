@@ -20,7 +20,7 @@ from common.concurrent_sessions import (
     run_script_in_concurrent_sessions,
     summarize_concurrent_runs,
 )
-from common.config import env
+from common.config import env, env_path
 from common.script_timings import script_timings_csv_path, write_script_timings_csv
 from common.session_time_report import describe_run, generate_session_time_report
 
@@ -35,8 +35,10 @@ BROWSER_STAGGER_S = int(env("CONCURRENT_SESSIONS_BROWSER_STAGGER_S", "30"))
 LAUNCH_ATTEMPTS = int(env("CONCURRENT_SESSIONS_LAUNCH_ATTEMPTS", "3"))
 LAUNCH_TIMEOUT_MS = int(env("CONCURRENT_SESSIONS_LAUNCH_TIMEOUT_MS", "180000"))
 LAUNCH_RETRY_WAIT_S = int(env("CONCURRENT_SESSIONS_LAUNCH_RETRY_WAIT_S", "15"))
-SCRIPT_PATH = env("CONCURRENT_SESSIONS_SCRIPT", env("CSV_SESSIONS_SCRIPT", "/home/posit/batch_mayur/generate_10kb_csv.R"))
-OUTPUT_DIR = env("CONCURRENT_SESSIONS_OUTPUT_DIR", env("CSV_SESSIONS_OUTPUT_DIR", "/home/posit"))
+SCRIPT_PATH = env_path("R_SCRIPT_CONCURRENT_SESSIONS", "CONCURRENT_SESSIONS_SCRIPT",
+                       "R_SCRIPT_GENERATE_CSV", "CSV_SESSIONS_SCRIPT")
+OUTPUT_DIR = env_path("OUTPUT_DIR_CONCURRENT_SESSIONS", "CONCURRENT_SESSIONS_OUTPUT_DIR",
+                      "OUTPUT_DIR_GENERATE_CSV", "CSV_SESSIONS_OUTPUT_DIR")
 OUTPUT_FILE_NAME = env("CONCURRENT_SESSIONS_OUTPUT_FILE", "generated_data_10kb.csv")
 SCRIPT_TIMEOUT_MS = int(env("CONCURRENT_SESSIONS_SCRIPT_TIMEOUT_MS", "600000"))
 TIMINGS_LABEL = "concurrent_%d_sessions_%d_browsers_U%d" % (SESSION_COUNT, BROWSER_COUNT, USER)

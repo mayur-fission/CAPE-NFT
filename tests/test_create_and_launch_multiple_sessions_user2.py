@@ -5,7 +5,7 @@ them. Every test force-quits the sessions it created.
 """
 import pytest
 
-from common.config import env
+from common.config import env, env_path
 from common.helper_function import (
     launch_sessions_scenario,
     login_and_plan_session_names,
@@ -20,7 +20,7 @@ SESSION_COUNT = int(env("RSTUDIO_SESSION_COUNT", "10"))
 SESSION_NAME_PREFIX = "AUTO_SESSION_U2_"
 LAUNCH_ATTEMPTS = 3
 LABEL = "user2"
-SOURCE_COMMAND = env("RSTUDIO_RUN_SCRIPT_SOURCE_COMMAND", "source('sample_10mb.R')")
+SOURCE_COMMAND = env_path("R_SOURCE_COMMAND_NEW_SESSIONS", "RSTUDIO_RUN_SCRIPT_SOURCE_COMMAND")
 SCRIPT_TIMEOUT_MS = int(env("RSTUDIO_RUN_SCRIPT_TIMEOUT_MS", "300000"))
 MONITOR_POLL_INTERVAL_S = float(env("RSTUDIO_RUN_SCRIPT_MONITOR_POLL_INTERVAL_SECONDS", "2"))
 

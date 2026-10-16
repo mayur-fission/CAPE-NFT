@@ -4,13 +4,12 @@ CLOSE_BROWSER_WAIT_S (else RSTUDIO_WORKBENCH_JOB_TEST_DURATION_SECONDS)
 seconds on their own. Every session
 created is force-quit afterwards.
 
-The script (default /home/posit/sample_run_sleep.R) must already exist on the
+The script (R_SCRIPT_CLOSE_TAB_JOB in .env) must already exist on the
 server.
 """
 import pytest
 
-from common.config import env
-from common.rstudio_workbenchjob import DEFAULT_WORKBENCH_JOB_SCRIPT
+from common.config import env, env_path
 from common.script_run_scenarios import (
     source_script_close_tabs_then_quit_scenario,
     start_jobs_close_tabs_then_stop_jobs_scenario,
@@ -18,7 +17,7 @@ from common.script_run_scenarios import (
 
 pytestmark = pytest.mark.rstudio_local
 
-SCRIPT_PATH = env("RSTUDIO_WORKBENCH_JOB_SCRIPT", DEFAULT_WORKBENCH_JOB_SCRIPT)
+SCRIPT_PATH = env_path("R_SCRIPT_CLOSE_TAB_JOB", "RSTUDIO_WORKBENCH_JOB_SCRIPT")
 SESSION_COUNT = int(env("RSTUDIO_SESSION_COUNT", required=True))
 # CLOSE_BROWSER_WAIT_S (the Jenkins field) wins when set; it has its own
 # name because .env, which already sets RSTUDIO_WORKBENCH_JOB_TEST_DURATION_SECONDS,

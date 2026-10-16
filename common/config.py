@@ -25,6 +25,21 @@ def env(name, default=None, required=False):
     return v
 
 
+def env_path(*names):
+    """The first of `names` that is set (non-empty) in the environment/.env.
+    Server paths (folders, R scripts, source() commands) have no defaults in
+    the code: they come from .env only, so raises RuntimeError naming the
+    settings when none is set."""
+    for name in names:
+        v = os.environ.get(name)
+        if v:
+            return v
+    raise RuntimeError(
+        "%s is not set. Server paths have no defaults - set it in .env (see README, Server paths)."
+        % " or ".join(names)
+    )
+
+
 def env_list(name, default=None):
     """Comma-separated env var as a list of non-empty, stripped items, or
     `default` when it is unset or empty."""

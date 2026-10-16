@@ -9,8 +9,7 @@ sessions) first.
 """
 import pytest
 
-from common.config import env
-from common.rstudio_workbenchjob import DEFAULT_WORKBENCH_JOB_SCRIPT
+from common.config import env, env_path
 from common.script_run_scenarios import (
     run_script_in_new_sessions_scenario,
     source_script_close_tabs_then_quit_scenario,
@@ -19,10 +18,10 @@ from common.script_run_scenarios import (
 
 pytestmark = pytest.mark.rstudio_local
 
-HTP_SCRIPT_PATH = env("HIGH_THROUGHPUT_JOB_SCRIPT", DEFAULT_WORKBENCH_JOB_SCRIPT)
+HTP_SCRIPT_PATH = env_path("R_SCRIPT_HIGH_THROUGHPUT", "HIGH_THROUGHPUT_JOB_SCRIPT")
 SESSION_COUNT = int(env("RSTUDIO_SESSION_COUNT", required=True))
 TEST_DURATION_SECONDS = float(env("RSTUDIO_WORKBENCH_JOB_TEST_DURATION_SECONDS", "300"))
-OUTPUT_DIR = env("HIGH_THROUGHPUT_JOB_OUTPUT_DIR", "/home/posit")
+OUTPUT_DIR = env_path("OUTPUT_DIR_HIGH_THROUGHPUT", "HIGH_THROUGHPUT_JOB_OUTPUT_DIR")
 OUTPUT_FILE_NAME = "generated_data.csv"
 SCRIPT_TIMEOUT_MS = int(env("HIGH_THROUGHPUT_JOB_TIMEOUT_MS", "1800000"))
 

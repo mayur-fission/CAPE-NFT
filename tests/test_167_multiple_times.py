@@ -11,15 +11,14 @@ import time
 
 import pytest
 
-from common.config import env
-from common.rstudio_workbenchjob import DEFAULT_WORKBENCH_JOB_SCRIPT
+from common.config import env, env_path
 from common.script_run_scenarios import run_script_in_new_sessions_scenario
 
 pytestmark = pytest.mark.rstudio_local
 
-HTP_SCRIPT_PATH = env("HIGH_THROUGHPUT_JOB_SCRIPT", DEFAULT_WORKBENCH_JOB_SCRIPT)
+HTP_SCRIPT_PATH = env_path("R_SCRIPT_HIGH_THROUGHPUT", "HIGH_THROUGHPUT_JOB_SCRIPT")
 TEST_DURATION_SECONDS = float(env("HIGH_THROUGHPUT_JOB_TEST_DURATION_SECONDS", "180"))
-OUTPUT_DIR = env("HIGH_THROUGHPUT_JOB_OUTPUT_DIR", "/home/posit")
+OUTPUT_DIR = env_path("OUTPUT_DIR_HIGH_THROUGHPUT", "HIGH_THROUGHPUT_JOB_OUTPUT_DIR")
 OUTPUT_FILE_NAME = "generated_data_10kb.csv"
 RUNS = int(env("HTP_REPEAT_RUNS", "3"))
 WAIT_BETWEEN_RUNS_S = float(env("HTP_REPEAT_WAIT_S", "30"))

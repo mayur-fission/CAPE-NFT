@@ -19,7 +19,7 @@ from common.api_ui_combo import (
     open_sessions,
     run_group_workloads,
 )
-from common.config import env
+from common.config import env, env_path
 from common.script_timings import script_timings_csv_path, write_script_timings_csv
 
 pytestmark = pytest.mark.rstudio_local
@@ -28,12 +28,12 @@ CSV_SESSIONS_USER = int(env("CSV_SESSIONS_USER", "1"))
 GROUP_CSVS = group_sessions_csv_paths(("test", "a", "b", "c"))
 SESSION_IDS_CSV = session_ids_csv_path(CSV_SESSIONS_USER)
 TIMINGS_LABEL = "new_api_sessions_U%d" % CSV_SESSIONS_USER
-SCRIPT_PATH = env("CSV_SESSIONS_SCRIPT", "/home/posit/batch_mayur/generate_10kb_csv.R")
-OUTPUT_DIR = env("CSV_SESSIONS_OUTPUT_DIR", "/home/posit")
+SCRIPT_PATH = env_path("R_SCRIPT_GENERATE_CSV", "CSV_SESSIONS_SCRIPT")
+OUTPUT_DIR = env_path("OUTPUT_DIR_GENERATE_CSV", "CSV_SESSIONS_OUTPUT_DIR")
 OUTPUT_FILE_NAME = "generated_data_10kb.csv"
 TEST_DURATION_S = int(env("GROUP_SESSIONS_TEST_DURATION_S", "300"))
 LIST_FILES_INTERVAL_S = int(env("GROUP_A_LIST_FILES_INTERVAL_S", "30"))
-WORKBENCH_JOB_SCRIPT_PATH = env("GROUP_B_WORKBENCH_JOB_SCRIPT", "/home/posit/sample_run_sleep.R")
+WORKBENCH_JOB_SCRIPT_PATH = env_path("R_SCRIPT_GROUP_B_WORKBENCH_JOB", "GROUP_B_WORKBENCH_JOB_SCRIPT")
 
 
 def test_api_created_session_groups_run_mixed_workloads(context):

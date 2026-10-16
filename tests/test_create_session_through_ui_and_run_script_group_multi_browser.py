@@ -20,7 +20,7 @@ import pytest
 
 from common.api_helper import group_sessions_csv_paths
 from common.api_ui_combo import browser_name_prefixes, run_group_workloads_across_browsers, wait_until_epoch
-from common.config import env
+from common.config import env, env_path
 from common.script_timings import script_timings_csv_path, write_script_timings_csv
 
 pytestmark = pytest.mark.rstudio_local
@@ -43,12 +43,12 @@ LAUNCH_ATTEMPTS = int(env("GROUP_SESSIONS_UI_LAUNCH_ATTEMPTS", "3"))
 # the wait before a retry (which reopens the session if it was created).
 LAUNCH_TIMEOUT_MS = int(env("GROUP_SESSIONS_UI_LAUNCH_TIMEOUT_MS", "180000"))
 LAUNCH_RETRY_WAIT_S = int(env("GROUP_SESSIONS_UI_LAUNCH_RETRY_WAIT_S", "15"))
-SCRIPT_PATH = env("CSV_SESSIONS_SCRIPT", "/home/posit/batch_mayur/generate_10kb_csv.R")
-OUTPUT_DIR = env("CSV_SESSIONS_OUTPUT_DIR", "/home/posit")
+SCRIPT_PATH = env_path("R_SCRIPT_GENERATE_CSV", "CSV_SESSIONS_SCRIPT")
+OUTPUT_DIR = env_path("OUTPUT_DIR_GENERATE_CSV", "CSV_SESSIONS_OUTPUT_DIR")
 OUTPUT_FILE_NAME = "generated_data_10kb.csv"
 TEST_DURATION_S = int(env("GROUP_SESSIONS_TEST_DURATION_S", "180"))
 LIST_FILES_INTERVAL_S = int(env("GROUP_A_LIST_FILES_INTERVAL_S", "30"))
-BACKGROUND_JOB_SCRIPT_PATH = env("GROUP_B_BACKGROUND_JOB_SCRIPT", "/home/posit/batch_mayur/git_status_5sec.R")
+BACKGROUND_JOB_SCRIPT_PATH = env_path("R_SCRIPT_GROUP_B_BACKGROUND_JOB", "GROUP_B_BACKGROUND_JOB_SCRIPT")
 
 
 def test_ui_created_session_groups_run_mixed_workloads_in_multiple_browsers(

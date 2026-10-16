@@ -6,9 +6,8 @@ closed.
 import pytest
 
 from common.api_helper import read_session_names, session_ids_csv_path
-from common.config import env
+from common.config import env, env_path
 from common.launch_already_created_sessions import api_session_names
-from common.rstudio_workbenchjob import DEFAULT_WORKBENCH_JOB_SCRIPT
 from common.script_run_scenarios import run_script_in_existing_sessions_scenario
 
 pytestmark = pytest.mark.rstudio_local
@@ -16,8 +15,8 @@ pytestmark = pytest.mark.rstudio_local
 SCRIPT_TIMEOUT_MS = int(env("HIGH_THROUGHPUT_JOB_TIMEOUT_MS", "1800000"))
 
 # Named API sessions (AUTO_API_SESSION_<API_SESSION_START..API_SESSION_END>)
-HTP_SCRIPT_PATH = env("HIGH_THROUGHPUT_JOB_SCRIPT", DEFAULT_WORKBENCH_JOB_SCRIPT)
-OUTPUT_DIR = env("HIGH_THROUGHPUT_JOB_OUTPUT_DIR", "/home/posit")
+HTP_SCRIPT_PATH = env_path("R_SCRIPT_HIGH_THROUGHPUT", "HIGH_THROUGHPUT_JOB_SCRIPT")
+OUTPUT_DIR = env_path("OUTPUT_DIR_HIGH_THROUGHPUT", "HIGH_THROUGHPUT_JOB_OUTPUT_DIR")
 OUTPUT_FILE_NAME = "generated_data.csv"
 # Set to "false" to keep each session's OUTPUT_FILE_NAME and folder.
 DELETE_OUTPUT = env("HIGH_THROUGHPUT_JOB_DELETE_OUTPUT", "true").lower() != "false"
@@ -25,8 +24,8 @@ TIMINGS_LABEL = "existing_api_sessions"
 
 # Sessions recorded in testdata/session_ids_U<CSV_SESSIONS_USER>.csv
 CSV_SESSIONS_USER = int(env("CSV_SESSIONS_USER", "1"))
-CSV_SCRIPT_PATH = env("CSV_SESSIONS_SCRIPT", "/home/posit/batch_mayur/generate_10kb_csv.R")
-CSV_OUTPUT_DIR = env("CSV_SESSIONS_OUTPUT_DIR", "/home/posit")
+CSV_SCRIPT_PATH = env_path("R_SCRIPT_GENERATE_CSV", "CSV_SESSIONS_SCRIPT")
+CSV_OUTPUT_DIR = env_path("OUTPUT_DIR_GENERATE_CSV", "CSV_SESSIONS_OUTPUT_DIR")
 CSV_OUTPUT_FILE_NAME = "generated_data_10kb.csv"
 CSV_TIMINGS_LABEL = "csv_api_sessions_U%d" % CSV_SESSIONS_USER
 

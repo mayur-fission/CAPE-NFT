@@ -11,7 +11,7 @@ from contextlib import contextmanager
 
 from playwright.sync_api import sync_playwright
 
-from common.config import browser_window_args, default_session_count, env, max_workers_for
+from common.config import browser_window_args, default_session_count, env, env_path, max_workers_for
 from common.rstudio_session_helper import next_auto_perf_session_names
 from common.rstudio_text_operations import create_text_file
 from common.script_timings import run_timed_console_command_repeatedly
@@ -151,7 +151,7 @@ def concurrent_source_script(
     Returns (results, run_elapsed_s); results carry "launch_elapsed_s",
     "run_elapsed_s" (one per run) and "bytes_received".
     """
-    source_command = source_command or env("RSTUDIO_SCRIPT_SOURCE_COMMAND", "source('sample_10mb.R')")
+    source_command = source_command or env_path("R_SOURCE_COMMAND_EXISTING_SESSIONS", "RSTUDIO_SCRIPT_SOURCE_COMMAND")
     timeout_ms = timeout_ms or int(env("RSTUDIO_SCRIPT_TIMEOUT_MS", "300000"))
 
     def _worker(index, session_name):

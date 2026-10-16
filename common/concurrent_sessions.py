@@ -24,7 +24,7 @@ from common.api_ui_combo import (
     report_failed_runs,
     run_in_parallel_browsers,
 )
-from common.config import EVIDENCE_DIR, env
+from common.config import EVIDENCE_DIR, env, env_path
 from common.launch_already_created_sessions import close_launched_sessions, run_script_in_launched_sessions
 from common.session_actions import set_session_working_directory
 from common.step_log import log_step
@@ -37,7 +37,7 @@ MAX_TABS_PER_BROWSER = 6
 DEFAULT_TABS_PER_BROWSER = 5
 # Working directory set in every session right after it launches; the
 # script itself then runs in its own <output_dir>/<session name> folder.
-SESSION_HOME_DIR = env("CONCURRENT_SESSIONS_HOME_DIR", "/home/posit")
+SESSION_HOME_DIR = env_path("WORKBENCH_HOME_DIR", "CONCURRENT_SESSIONS_HOME_DIR")
 
 
 def concurrent_session_names(count, prefix=CONCURRENT_SESSION_PREFIX):

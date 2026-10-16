@@ -3,12 +3,12 @@ sourced once or RUN_COUNT times, by one user or CONCURRENT_USERS users at once
 (each in its own isolated browser). Captures best-effort server/DB metrics
 and OTel samples, and force-quits every session created.
 
-The sourced script (default sample_10mb.R) must already exist in
-RSTUDIO_WORKING_DIR on the server.
+The script sourced by R_SOURCE_COMMAND_NEW_SESSIONS (.env) must already
+exist in RSTUDIO_WORKING_DIR on the server.
 """
 import pytest
 
-from common.config import env
+from common.config import env, env_path
 from common.helper_function import (
     capture_server_and_db_metrics,
     describe_script_runs,
@@ -31,7 +31,7 @@ from common.session_scenarios import launch_and_run_script
 
 pytestmark = pytest.mark.rstudio_local
 
-SOURCE_COMMAND = env("RSTUDIO_RUN_SCRIPT_SOURCE_COMMAND", "source('sample_10mb.R')")
+SOURCE_COMMAND = env_path("R_SOURCE_COMMAND_NEW_SESSIONS", "RSTUDIO_RUN_SCRIPT_SOURCE_COMMAND")
 SCRIPT_TIMEOUT_MS = int(env("RSTUDIO_RUN_SCRIPT_TIMEOUT_MS", "300000"))
 METRICS_WINDOW_MINUTES = int(env("RSTUDIO_METRICS_WINDOW_MINUTES", "5"))
 

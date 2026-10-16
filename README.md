@@ -34,14 +34,31 @@ RSTUDIO_WORKING_DIR=/home/<user>
 RSTUDIO_SESSION_COUNT=3
 ```
 
-`.env` is grouped by test file and lists every optional setting with its
-default (as a commented-out `#KEY=default` line). Ask a teammate for a copy
-rather than starting from scratch.
+`.env` holds only the settings in use, grouped (server and users, server
+paths, session counts, timings, metrics). Other settings are optional - the
+code has their defaults - and can be added when needed. Ask a teammate for a
+copy rather than starting from scratch.
 
-The R scripts the tests source (`sample_10mb.R`, `sample_100mb.R`,
-`generate_10kb_csv.R`, `sample_run_sleep.R`) must already exist on the
-server, by default in `/home/posit` (`generate_10kb_csv.R` in
-`/home/posit/batch_mayur`).
+Server paths have no defaults in the code: every folder, R script and
+`source()` command a test uses comes from `.env`, and a test stops with
+"<NAME> is not set" when one it needs is missing. They are grouped by name:
+
+| Setting | What it is |
+|---|---|
+| `WORKBENCH_HOME_DIR` | Home folder of the test user on the server (concurrent tests set it after launch) |
+| `RSTUDIO_WORKING_DIR` | Working folder for new sessions (also the API tests) |
+| `WORKING_DIR_EXISTING_SESSIONS` | Working folder in existing sessions (optional; defaults to `RSTUDIO_WORKING_DIR`) |
+| `R_SCRIPT_HIGH_THROUGHPUT` / `OUTPUT_DIR_HIGH_THROUGHPUT` | test_167, test_168, test_167_multiple_times, test_run_high_throughput_job, test_launch_existing_session_and_run_r_scripts |
+| `R_SCRIPT_CLOSE_TAB_JOB` | test_create_sessions_run_r_close_browser |
+| `R_SCRIPT_GENERATE_CSV` / `OUTPUT_DIR_GENERATE_CSV` | The CSV-session (group) tests |
+| `R_SCRIPT_GROUP_B_WORKBENCH_JOB`, `R_SCRIPT_GROUP_B_BACKGROUND_JOB` | Group B jobs in the group tests |
+| `R_SCRIPT_CONCURRENT_SESSIONS` / `OUTPUT_DIR_CONCURRENT_SESSIONS` | test_concurrent_sessions (optional; default to the CSV ones) |
+| `R_SCRIPT_CONCURRENT_10MIN`, `R_SCRIPT_CONCURRENT_30MIN` | The 10- and 30-minute concurrent tests |
+| `R_SOURCE_COMMAND_NEW_SESSIONS`, `R_SOURCE_COMMAND_EXISTING_SESSIONS` | `source(...)` commands of the perf tests |
+
+The older names (e.g. `HIGH_THROUGHPUT_JOB_SCRIPT`, `CSV_SESSIONS_SCRIPT`)
+still work as fallbacks. The scripts must already exist on the server at
+those paths.
 
 ## Running
 
