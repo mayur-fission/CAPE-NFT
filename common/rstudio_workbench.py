@@ -23,8 +23,8 @@ def login(page, base_url, username=None, password=None):
 
     sign_in_url = base_url if base_url.endswith("/auth-sign-in") else base_url + "/auth-sign-in"
     page.goto(sign_in_url)
-    page.get_by_label(locators.USERNAME_LABEL).fill(username)
-    page.get_by_label(locators.PASSWORD_LABEL).fill(password)
+    page.locator(locators.USERNAME_INPUT).fill(username)
+    page.locator(locators.PASSWORD_INPUT).fill(password)
     page.get_by_role("button", name=locators.SIGN_IN_BUTTON).click()
     page.get_by_text(locators.NEW_SESSION_TEXT, exact=True).first.wait_for(state="visible", timeout=50000)
     page.wait_for_timeout(2000)  # the session table re-renders shortly after

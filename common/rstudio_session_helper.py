@@ -296,7 +296,7 @@ def quit_session(page, row_id):
 
 
 def bulk_quit_sessions(page, row_ids):
-    """Check each row's checkbox and click the scoped "Quit (N)" button once
+    """Check each row's checkbox and click the scoped "Quit" button once
     (no confirmation dialog). Rows without a checkbox fall back to
     quit_session(); rows that have already gone are skipped.
 
@@ -324,7 +324,7 @@ def bulk_quit_sessions(page, row_ids):
             pass  # don't let one bad checkbox stall the batch
 
     if checked:
-        quit_button = page.get_by_role("button", name=locators.BULK_QUIT_BUTTON_TEXT % len(checked), exact=True)
+        quit_button = page.locator(locators.BULK_QUIT_BUTTON)
         if quit_button.count() > 0:
-            quit_button.click()
+            quit_button.first.click()
     return checked

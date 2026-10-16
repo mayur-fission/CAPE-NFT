@@ -3,8 +3,8 @@ grouped by the screen they belong to. Update them here when the UI changes.
 """
 
 # --- Sign-in page (login()) -------------------------------------------------
-USERNAME_LABEL = "Username"
-PASSWORD_LABEL = "Password"
+USERNAME_INPUT = "xpath=//input[@name='username']"
+PASSWORD_INPUT = "xpath=//input[@name='password']"
 SIGN_IN_BUTTON = "Sign in"
 
 # --- Session list ("home") page --------------------------------------------
@@ -55,12 +55,13 @@ REMOVE_LINK_TEXT = "Remove"
 
 # --- Bulk session selection / scoped Quit (bulk_quit_sessions()) -----------
 # Each row's checkbox is found by role within the row (its name includes the
-# session name). The Quit button's name includes the checked count, e.g.
-# "Quit (3)", so BULK_QUIT_BUTTON_TEXT is a %-format template. It quits
-# immediately, with no confirmation dialog.
+# session name). The Quit button above the table quits the checked rows
+# immediately, with no confirmation dialog. Its text is just "Quit" (older
+# Workbench versions showed the count, "Quit (3)" - contains() matches both);
+# "Quit All" is excluded, since it quits every session.
 SESSION_ROW_CHECKBOX_ROLE = "checkbox"
 SESSION_ROW_CHECKBOX_NAME = None
-BULK_QUIT_BUTTON_TEXT = "Quit (%d)"
+BULK_QUIT_BUTTON = "xpath=//button[contains(normalize-space(.), 'Quit') and not(contains(., 'All'))]"
 
 # --- File menu / New Project Wizard (create_project_from_existing_directory())
 FILE_MENU_SELECTOR = "#rstudio_label_file_menu"
