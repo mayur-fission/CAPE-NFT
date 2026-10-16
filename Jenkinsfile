@@ -104,7 +104,7 @@ jobParams << booleanParam(name: 'CAPTURE_TEST_DATA', defaultValue: false,
                  'not kept (the id lists are still written for later tests, just not archived)')
 jobParams << booleanParam(name: 'DOWNLOAD_ALLURE_REPORT', defaultValue: true,
     description: '[Browser and evidence] Ticked (default): the Allure report is also saved as one self-contained HTML file ' +
-                 '(allure-report.html under the build\'s Build Artifacts) that you can download and open in any browser, ' +
+                 '(Build Artifacts -> allure-report.zip: click to download, unzip, open allure-report.html in any browser), ' +
                  'no Jenkins needed (the pipeline downloads the Allure command line for it). Unticked: only the ' +
                  'Allure report inside Jenkins')
 // --- How tests run ---
@@ -320,10 +320,11 @@ def downloadableAllureReport() {
                     curl -fsSL -o .allure-cli/allure.zip "${url}"
                     ${py} -m zipfile -e .allure-cli/allure.zip .allure-cli
                 fi
-                rm -rf allure-report-single allure-report.html
+                rm -rf allure-report-single allure-report.html allure-report.zip
                 # zipfile drops the exec bit, so run the launcher through sh
                 sh .allure-cli/allure-${v}/bin/allure generate --single-file evidence/allure-results --clean -o allure-report-single
                 mv allure-report-single/index.html allure-report.html
+                ${py} -m zipfile -c allure-report.zip allure-report.html
             """
         } else {
             bat """
@@ -335,12 +336,16 @@ def downloadableAllureReport() {
                 )
                 if exist allure-report-single rmdir /S /Q allure-report-single
                 if exist allure-report.html del /F /Q allure-report.html
+                if exist allure-report.zip del /F /Q allure-report.zip
                 call .allure-cli\\allure-${v}\\bin\\allure.bat generate --single-file evidence\\allure-results --clean -o allure-report-single || exit /b 1
-                move /Y allure-report-single\\index.html allure-report.html
+                move /Y allure-report-single\\index.html allure-report.html || exit /b 1
+                ${py} -m zipfile -c allure-report.zip allure-report.html
             """
         }
-        archiveArtifacts artifacts: 'allure-report.html', fingerprint: true
-        echo 'Downloadable Allure report: Build Artifacts -> allure-report.html'
+        // Jenkins serves artifacts with a CSP that blocks scripts, so clicking the
+        // .html shows a blank page; the .zip downloads on click instead.
+        archiveArtifacts artifacts: 'allure-report.html, allure-report.zip', fingerprint: true
+        echo 'Downloadable Allure report: Build Artifacts -> allure-report.zip (unzip, open allure-report.html)'
     } catch (Exception e) {
         echo "Downloadable Allure report not built: ${e.message}"
     }
@@ -357,7 +362,7 @@ def sendResultEmail() {
     }
     def status = currentBuild.currentResult
     def tests = (env.SELECTED_TESTS ?: '').split(',').findAll { it }
-    def hasReport = fileExists('allure-report.html')
+    def hasReport = fileExists('allure-report.zip')
     def body = """\
         <p><b>${env.JOB_NAME} #${env.BUILD_NUMBER}: ${status}</b>
            (${params.ENVIRONMENT}, took ${currentBuild.durationString.replace(' and counting', '')})</p>
@@ -366,8 +371,8 @@ def sendResultEmail() {
            <a href="${env.BUILD_URL}testReport/">Test results</a> |
            <a href="${env.BUILD_URL}console">Console log</a> |
            <a href="${env.BUILD_URL}artifact/">Build artifacts</a></p>
-        <p>${hasReport ? 'The full Allure report is attached (allure-report.html) - download it and open it in any browser.'
-                       : 'No allure-report.html this time (DOWNLOAD_ALLURE_REPORT unticked or the report could not be built).'}</p>
+        <p>${hasReport ? 'The full Allure report is attached (allure-report.zip) - unzip it and open allure-report.html in any browser.'
+                       : 'No Allure report attached this time (DOWNLOAD_ALLURE_REPORT unticked or the report could not be built).'}</p>
     """.stripIndent()
     try {
         emailext(
@@ -375,7 +380,7 @@ def sendResultEmail() {
             subject: "[${status}] ${env.JOB_NAME} #${env.BUILD_NUMBER} - ${params.ENVIRONMENT} test report",
             body: body,
             mimeType: 'text/html',
-            attachmentsPattern: hasReport ? 'allure-report.html' : '',
+            attachmentsPattern: hasReport ? 'allure-report.zip' : '',
         )
         echo "Result email sent to ${to}"
     } catch (NoSuchMethodError ignored) {
