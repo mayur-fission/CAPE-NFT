@@ -48,6 +48,9 @@ TEST_FILES = [
     'test_concurrent_sessions'                            :
         'CONCURRENT_SESSIONS UI-created sessions (CONCURRENT_SESSION_1, _2, ...) over CONCURRENT_SESSIONS_BROWSERS browsers, ' +
         'R script sourced in all at once and timed, with session time charts',
+    'test_concurrent_sessions_batch_execution'            :
+        'Like test_concurrent_sessions (same CONCURRENT_SESSIONS settings), but each browser starts the R script as soon as ' +
+        'its own sessions are launched; cleanup waits until every browser has finished',
     'test_concurrent_sessions_10min'                      :
         'CONCURRENT_10MIN_SESSIONS UI-created sessions run the ~10 minute R script (htp_10min.R) at once, timed, with charts',
     'test_concurrent_sessions_30min'                      :

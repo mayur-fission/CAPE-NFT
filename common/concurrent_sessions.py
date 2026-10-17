@@ -67,11 +67,14 @@ def split_across_browsers(session_names, browser_count):
 def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, user, session_names,
                                       browser_count, label, script_path, output_dir, output_file_name,
                                       script_timeout_ms, stagger_s=0, attempts=3, launch_timeout_ms=180000,
-                                      retry_wait_s=15, delete_output=False, poll_interval_ms=500):
+                                      retry_wait_s=15, delete_output=False, poll_interval_ms=500,
+                                      start_together=True):
     """Spread `session_names` over `browser_count` browsers (see
     split_across_browsers()). Each browser logs in as `user`, quits leftover
     sessions with its names, launches each name in its own tab, waits for
-    the other browsers, then sources `script_path` in all its tabs at once
+    the other browsers (only with start_together - otherwise each browser
+    starts as soon as its own sessions are launched, "batch" mode), then
+    sources `script_path` in all its tabs at once
     (each in `output_dir`/<session name>, emptied first; a run only counts
     as ok if `output_file_name` is there afterwards) and waits up to
     `script_timeout_ms`. Browsers start `stagger_s` apart. With
@@ -79,8 +82,13 @@ def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, u
     it has been checked, so large outputs do not pile up on the server.
     Each console is checked every `poll_interval_ms` while the scripts run.
 
-    The scripts are skipped everywhere if any browser failed to launch its
-    sessions. Tabs are closed and the created sessions quit even on failure.
+    With start_together, the scripts are skipped everywhere if any browser
+    failed to launch its sessions; in batch mode a browser whose launch
+    failed is reported and the others carry on. Either way, every browser
+    waits for the others to finish their scripts (and output checks) before
+    it closes its tabs and quits its sessions, so no cleanup runs while
+    another browser is still executing. Tabs are closed and the created
+    sessions quit even on failure.
 
     Returns (runs, errors): every run record, and "browser <prefix>: <error>"
     per failed browser.
@@ -104,6 +112,7 @@ def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, u
             context, prefix, names_by_browser[prefix], user, "%s %s" % (label, prefix.rstrip("_")),
             ready, done, launch_failed, attempts, launch_timeout_ms, retry_wait_s,
             script_path, output_dir, output_file_name, script_timeout_ms, delete_output, poll_interval_ms,
+            start_together,
         )
 
     results = run_in_parallel_browsers(
@@ -121,7 +130,8 @@ def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, u
 
 def _run_script_in_browser(context, prefix, session_names, user, label, ready, done, launch_failed,
                            attempts, launch_timeout_ms, retry_wait_s, script_path, output_dir,
-                           output_file_name, script_timeout_ms, delete_output=False, poll_interval_ms=500):
+                           output_file_name, script_timeout_ms, delete_output=False, poll_interval_ms=500,
+                           start_together=True):
     """One browser's part of run_script_in_concurrent_sessions(); a browser
     whose launch fails adds its prefix to `launch_failed`. Returns (runs,
     error): its run records and the error that failed it, else None."""
@@ -143,14 +153,19 @@ def _run_script_in_browser(context, prefix, session_names, user, label, ready, d
             launch_failed.add(prefix)
             raise
         finally:
-            log_step("%d of %d session(s) ready in this browser - waiting for the other browsers",
-                     len(launched), len(session_names))
-            ready.wait()
-        if launch_failed:
-            raise AssertionError("scripts skipped: launch failed in browser(s) %s"
-                                 % sorted(p.rstrip("_") for p in launch_failed))
-        log_step("All browsers are ready - starting the R script %s in every session",
-                 os.path.basename(script_path))
+            if start_together:
+                log_step("%d of %d session(s) ready in this browser - waiting for the other browsers",
+                         len(launched), len(session_names))
+                ready.wait()
+        if start_together:
+            if launch_failed:
+                raise AssertionError("scripts skipped: launch failed in browser(s) %s"
+                                     % sorted(p.rstrip("_") for p in launch_failed))
+            log_step("All browsers are ready - starting the R script %s in every session",
+                     os.path.basename(script_path))
+        else:
+            log_step("All %d session(s) of this browser are ready - starting the R script %s in them now",
+                     len(launched), os.path.basename(script_path))
         started = time.time()
         runs += run_script_in_launched_sessions(
             launched, script_path, working_dir=output_dir, timeout_ms=script_timeout_ms,
@@ -162,6 +177,7 @@ def _run_script_in_browser(context, prefix, session_names, user, label, ready, d
     except Exception as exc:
         error = exc
     finally:
+        log_step("This browser is done - waiting for the other browsers to finish before cleanup")
         try:
             done.wait()
         except threading.BrokenBarrierError:
