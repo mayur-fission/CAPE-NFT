@@ -2,6 +2,8 @@
 #   playwright install chromium
 pytest==8.3.3
 pytest-playwright==0.8.0
+# Run test files in parallel processes: pytest -n 2 --dist loadfile
+pytest-xdist==3.8.0
 playwright==1.60.0
 python-dotenv==1.2.2
 
