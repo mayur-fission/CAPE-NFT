@@ -13,7 +13,7 @@ from common.perf_report import (
     write_json_report,
 )
 
-from config.config import EVIDENCE_DIR
+from config.config import evidence_dir
 from common.rstudio_session_helper import goto_session_list, row_ids
 from common.session_actions import login_to_posit_workbench
 from common.session_batch import create_multiple_sessions
@@ -23,7 +23,7 @@ from common.session_retry import LAUNCH_ATTEMPTS
 
 
 def _evidence(file_name):
-    return os.path.join(EVIDENCE_DIR, file_name)
+    return os.path.join(evidence_dir(), file_name)
 
 
 DEFAULT_CSV_PATH = _evidence("rstudio_session_aggregate_report.csv")

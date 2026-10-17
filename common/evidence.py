@@ -1,4 +1,4 @@
-"""Test evidence for this run's folder (config.config EVIDENCE_DIR):
+"""Test evidence for the running test's folder (config.config evidence_dir()):
 screenshots of a tab and copies of files a session wrote, attached to
 Allure. Never raises - collecting evidence must not fail a test.
 
@@ -12,7 +12,7 @@ import time
 
 from common.perf_report import attach_allure_file
 
-from config.config import EVIDENCE_DIR, env
+from config.config import env, evidence_dir
 from common.rstudio_console_commands import read_text_file
 
 _OFF = ("", "0", "false", "False", "no")
@@ -28,7 +28,7 @@ def _evidence_path(name):
     screenshot of the same step and session does not overwrite it."""
     root, ext = os.path.splitext(re.sub(r"[^\w.-]", "_", name))
     stamp = time.strftime("%Y%m%d-%H%M%S") + "-%03d" % (int(time.time() * 1000) % 1000)
-    return os.path.join(EVIDENCE_DIR, "%s_%s%s" % (root, stamp, ext))
+    return os.path.join(evidence_dir(), "%s_%s%s" % (root, stamp, ext))
 
 
 def save_screenshot(page, name, always=False):
@@ -70,7 +70,6 @@ def save_output_file(page, session_name, path, size=None):
         if content is None:
             print("\n[rstudio-local] session %s: %s not found, nothing to save" % (session_name, path))
             return
-        os.makedirs(EVIDENCE_DIR, exist_ok=True)
         with open(local_path, "w", encoding="utf-8", newline="") as f:
             f.write(content.replace("\r\n", "\n").rstrip("\n") + "\n")
         print("\n[rstudio-local] session %s: output saved to %s" % (session_name, local_path))

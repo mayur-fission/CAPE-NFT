@@ -11,7 +11,7 @@ from common.perf_report import attach_allure_file, write_json_report
 from common.api_ui_combo import launch_sessions_in_tabs, login_and_quit_sessions_named, quit_ui_sessions_named
 from common.parallel_browsers import run_in_parallel_browsers
 from common.parallel_browsers import BrowserProgress, free_port, split_across_browsers
-from config.config import EVIDENCE_DIR, env
+from config.config import env, evidence_dir
 from common.launch_already_created_sessions import SETWD_ATTEMPTS, SETWD_RETRY_WAIT_S, close_launched_sessions
 from common.rstudio_console_commands import r_source_command, submit_console_command
 from common.session_actions import set_session_working_directory
@@ -72,7 +72,7 @@ def run_close_tab_batch(browser_name, launch_args, context_args, user, session_n
         if error is not None:
             errors.append("browser %s: %s" % (browser_id, error))
     if drops:
-        json_path = os.path.join(EVIDENCE_DIR, "session_drops_%s.json" % label)
+        json_path = os.path.join(evidence_dir(), "session_drops_%s.json" % label)
         write_json_report(json_path, drops)
         attach_allure_file(json_path)
     for path in progress.captured:

@@ -23,7 +23,7 @@ from datetime import datetime
 
 import pytest
 
-from config.config import EVIDENCE_DIR, REPO_ROOT, env, env_list
+from config.config import REPO_ROOT, env, env_list, evidence_dir
 from common.evidence import save_screenshot
 from common.rstudio_session_helper import goto_session_list, stable_session_status_counts
 from common.session_actions import login_to_posit_workbench
@@ -41,16 +41,19 @@ if STOP_FILE and not os.path.isabs(STOP_FILE):
 READY_FILE = env("ACTIVE_SESSIONS_READY_FILE") or None
 if READY_FILE and not os.path.isabs(READY_FILE):
     READY_FILE = os.path.join(REPO_ROOT, READY_FILE)
-CSV_PATH = os.path.join(EVIDENCE_DIR, "active_sessions.csv")
+CSV_NAME = "active_sessions.csv"  # in the test's evidence folder
+
+
+def _csv_path():
+    return os.path.join(evidence_dir(), CSV_NAME)
 CSV_HEADER = ["Time", "Elapsed (s)", "Poll", "User", "Active", "Executing", "Total Sessions (Active + Executing)",
               "Listed Sessions", "Statuses", "Error"]
 
 
 def _write_csv(rows):
-    """(Re)write CSV_PATH with CSV_HEADER and `rows`, so the counts so far
+    """(Re)write the counts CSV with CSV_HEADER and `rows`, so the counts so far
     are on disk even if the run is aborted."""
-    os.makedirs(EVIDENCE_DIR, exist_ok=True)
-    with open(CSV_PATH, "w", newline="", encoding="utf-8") as fh:
+    with open(_csv_path(), "w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
         writer.writerow(CSV_HEADER)
         writer.writerows(rows)
@@ -96,7 +99,7 @@ def test_active_session_count_every_10_seconds(browser, browser_context_args, ca
               % (", ".join(str(u) for u in USERS), POLL_INTERVAL_S,
                  "until the other tests finish (%s appears), at most %.0fs" % (STOP_FILE, MONITOR_S) if STOP_FILE
                  else "for %.0fs" % MONITOR_S,
-                 CSV_PATH))
+                 _csv_path()))
 
         started = time.time()
         poll = 0
@@ -151,8 +154,8 @@ def test_active_session_count_every_10_seconds(browser, browser_context_args, ca
     finally:
         if rows:
             _write_csv(rows)
-            attach_allure_file(CSV_PATH)
-            _live(capsys, "%d poll(s) written to %s" % (len({r[2] for r in rows}), CSV_PATH))
+            attach_allure_file(_csv_path())
+            _live(capsys, "%d poll(s) written to %s" % (len({r[2] for r in rows}), _csv_path()))
         for context in contexts:
             context.close()
 

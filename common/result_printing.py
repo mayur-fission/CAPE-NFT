@@ -2,7 +2,7 @@
 from common.script_timings import failed_runs
 import time
 import os
-from config.config import EVIDENCE_DIR
+from config.config import evidence_dir
 from common.perf_report import write_json_report
 from common.perf_report import attach_allure_file
 
@@ -119,7 +119,7 @@ def summarize_concurrent_runs(runs, label, session_count, browser_count):
         % (label, summary["ok"], summary["runs"], browser_count, summary["wall_clock_s"],
            summary["min_s"], summary["avg_s"], summary["max_s"])
     )
-    path = os.path.join(EVIDENCE_DIR, "rstudio_concurrent_summary_%s.json" % label)
+    path = os.path.join(evidence_dir(), "rstudio_concurrent_summary_%s.json" % label)
     write_json_report(path, summary)
     attach_allure_file(path)
     return summary

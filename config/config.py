@@ -14,38 +14,31 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EVIDENCE_ROOT = os.path.join(REPO_ROOT, "evidence")
 
 
-def _run_evidence_dir():
-    """This run's own folder for its evidence (CSVs, charts, JSON reports,
-    screenshots, captures): evidence/runs/<YYYYmmdd-HHMMSS>_<test names>.
+# Start time of this pytest run, shared with pytest-xdist workers (they are
+# started by this process and inherit it), so test files run in parallel
+# get folders with the same time stamp.
+RUN_STAMP = os.environ.setdefault("EVIDENCE_RUN_STAMP", time.strftime("%Y%m%d-%H%M%S"))
 
-    Only under pytest; otherwise (helper scripts, the chart CLI) evidence/
-    itself, so no empty run folders pile up. The folder is passed on in
-    EVIDENCE_RUN_DIR, so pytest-xdist workers (started by this process) use
-    the same one, and a caller can set it to choose the folder.
-    """
-    if os.environ.get("EVIDENCE_RUN_DIR"):
-        return os.environ["EVIDENCE_RUN_DIR"]
-    if "pytest" not in sys.modules:
-        return EVIDENCE_ROOT
-    names = []
-    for arg in sys.argv[1:]:
-        base = os.path.splitext(os.path.basename(arg.split("::")[0]))[0]
-        if not arg.startswith("-") and base.startswith("test_") and base not in names:
-            names.append(base)
-    name = "+".join(names[:2]) + ("+%d_more" % (len(names) - 2) if len(names) > 2 else "") if names else "pytest"
-    folder = os.path.join(EVIDENCE_ROOT, "runs", "%s_%s" % (time.strftime("%Y%m%d-%H%M%S"),
-                                                            re.sub(r"[^A-Za-z0-9_+.-]", "_", name)[:120]))
-    path, n = folder, 1
-    while os.path.exists(path):  # another run started in the same second with the same tests
-        n += 1
-        path = "%s_%d" % (folder, n)
-    # created by conftest.py once tests run (not for --collect-only)
-    os.environ["EVIDENCE_RUN_DIR"] = path
+
+def current_test_file():
+    """Name (no .py) of the test file running now, from pytest's
+    PYTEST_CURRENT_TEST (seen by every thread of the process), else None."""
+    current = os.environ.get("PYTEST_CURRENT_TEST", "")
+    return os.path.splitext(os.path.basename(current.split("::")[0]))[0] or None
+
+
+def evidence_dir(test_file=None):
+    """The folder evidence goes to, created on first use: under pytest one
+    folder per test file per run, evidence/runs/<run start>_<test file>/ -
+    so test files run in parallel (pytest -n) each get their own; outside
+    pytest (helper scripts, the chart CLI) evidence/ itself."""
+    test_file = test_file or current_test_file()
+    if "pytest" not in sys.modules or not test_file:
+        path = EVIDENCE_ROOT
+    else:
+        path = os.path.join(EVIDENCE_ROOT, "runs", "%s_%s" % (RUN_STAMP, re.sub(r"[^\w.-]", "_", test_file)[:120]))
+    os.makedirs(path, exist_ok=True)
     return path
-
-
-# Where this run's evidence goes (see _run_evidence_dir())
-EVIDENCE_DIR = _run_evidence_dir()
 
 # override=True so a stale value left in the shell (e.g. an old API token)
 # can't shadow .env.

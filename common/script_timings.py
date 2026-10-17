@@ -11,7 +11,7 @@ from datetime import datetime
 from common.perf_report import write_csv_report
 
 from common import locators
-from config.config import EVIDENCE_DIR, env
+from config.config import env, evidence_dir
 from common.evidence import save_screenshot
 from common.step_log import log_step
 from common.rstudio_console_commands import (
@@ -24,7 +24,7 @@ from common.rstudio_console_commands import (
 
 def script_timings_csv_path(name):
     """evidence/rstudio_script_timings_<name>.csv"""
-    return os.path.join(EVIDENCE_DIR, "rstudio_script_timings_%s.csv" % name)
+    return os.path.join(evidence_dir(), "rstudio_script_timings_%s.csv" % name)
 
 
 def new_run_record(session_name):

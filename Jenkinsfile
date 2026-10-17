@@ -792,9 +792,9 @@ pipeline {
     post {
         always {
             junit testResults: 'evidence/junit*.xml', allowEmptyResults: true
-            // Always: each run's own folder evidence/runs/<time>_<tests>/ (CSVs,
+            // Always: one folder per test file per run, evidence/runs/<time>_<test file>/ (CSVs,
             // charts, JSON reports, failure/step screenshots, stuck-browser and
-            // session-drop captures - see config/config.py EVIDENCE_DIR), and the
+            // session-drop captures - see config/config.py evidence_dir()), and the
             // failure screenshots of tests using the page fixture (test-results/).
             archiveArtifacts artifacts: 'evidence/runs/**, evidence/**/*.csv, evidence/**/*.json, test-results/**',
                              excludes: 'evidence/**/output_*, evidence/allure-results/**', allowEmptyArchive: true

@@ -13,7 +13,7 @@ import json
 import base64
 import urllib
 import os
-from config.config import EVIDENCE_DIR
+from config.config import evidence_dir
 from common.perf_report import write_json_report
 import math
 
@@ -140,6 +140,7 @@ def capture_stuck_browser(port, prefix, label, stage, since, timeout_s=120):
     """
     browser_id = prefix.rstrip("_")
     stamp = time.strftime("%Y%m%d-%H%M%S")
+    folder = evidence_dir()  # the running test's folder
     info = {"browser": browser_id, "stage": stage, "stuck_for_s": round(time.time() - since),
             "captured_at": time.strftime("%Y-%m-%d %H:%M:%S"), "tabs": []}
     paths = []
@@ -160,7 +161,7 @@ def capture_stuck_browser(port, prefix, label, stage, since, timeout_s=120):
         for n, target in enumerate(targets, 1):
             tab = {"tab": n, "title": target.get("title"), "url": target.get("url")}
             if can_screenshot and target.get("webSocketDebuggerUrl"):
-                path = os.path.join(EVIDENCE_DIR, "stuck_%s_%s_tab%d_%s.png" % (label, browser_id, n, stamp))
+                path = os.path.join(folder, "stuck_%s_%s_tab%d_%s.png" % (label, browser_id, n, stamp))
                 try:
                     _screenshot_target(target["webSocketDebuggerUrl"], path)
                     tab["screenshot"] = os.path.basename(path)
@@ -175,7 +176,7 @@ def capture_stuck_browser(port, prefix, label, stage, since, timeout_s=120):
     thread.join(timeout_s)
     if thread.is_alive():
         info["error"] = "capture did not finish within %ds" % timeout_s
-    json_path = os.path.join(EVIDENCE_DIR, "stuck_%s_%s_%s.json" % (label, browser_id, stamp))
+    json_path = os.path.join(folder, "stuck_%s_%s_%s.json" % (label, browser_id, stamp))
     write_json_report(json_path, info)
     log_step("Captured possibly stuck browser %s (%s for %ds): %d tab(s), %d screenshot(s)%s -> %s",
              browser_id, stage, info["stuck_for_s"], len(info["tabs"]), len(paths),

@@ -12,7 +12,7 @@ import time
 from common.perf_report import attach_allure_file, write_json_report
 
 from common import locators
-from config.config import EVIDENCE_DIR
+from config.config import evidence_dir
 from common.evidence import save_screenshot
 from common.rstudio_console_commands import CONSOLE_WAIT_TIMEOUT_MS, run_console_command
 from common.rstudio_session_helper import (
@@ -59,7 +59,7 @@ def monitor_sessions(page, home_url, session_names, duration_s, interval_s, labe
     attached to Allure. A poll that cannot read the list is logged and
     skipped (it does not count as a drop)."""
     session_names = list(session_names)
-    csv_path = os.path.join(EVIDENCE_DIR, "session_monitor_%s.csv" % label)
+    csv_path = os.path.join(evidence_dir(), "session_monitor_%s.csv" % label)
     started = time.time()
     drops = {}
     log_step("Monitoring %d session(s) for %.0fs, checking every %.0fs", len(session_names), duration_s, interval_s)
@@ -96,7 +96,7 @@ def monitor_sessions(page, home_url, session_names, duration_s, interval_s, labe
             page.wait_for_timeout(max(0, min(interval_s, duration_s - (time.time() - started))) * 1000)
     attach_allure_file(csv_path)
     if drops:
-        json_path = os.path.join(EVIDENCE_DIR, "session_drops_%s.json" % label)
+        json_path = os.path.join(evidence_dir(), "session_drops_%s.json" % label)
         write_json_report(json_path, list(drops.values()))
         attach_allure_file(json_path)
         log_step("%d session(s) dropped while their tabs were closed: %s",
