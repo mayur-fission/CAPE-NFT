@@ -374,15 +374,21 @@ def _run_script_in_browser(context, prefix, session_names, user, label, ready, p
                 for attempt in range(1, SETWD_ATTEMPTS + 1):
                     try:
                         set_session_working_directory(session.page, path=SESSION_HOME_DIR)
+                        log_step("Working directory set to %s in session %s", SESSION_HOME_DIR, session.session_name)
                         break
                     except Exception as exc:
                         if attempt == SETWD_ATTEMPTS:
-                            raise
+                            # Not fatal for the browser: right before the script each session
+                            # sets its own folder again (with retries), and only a session
+                            # that fails there fails - not this browser's other sessions.
+                            log_step("WARNING: could not set the working directory to %s in session %s "
+                                     "(carrying on, the script step sets it again): %s",
+                                     SESSION_HOME_DIR, session.session_name, exc)
+                            break
                         log_step("Could not set the working directory in session %s (attempt %d of %d), "
                                  "retrying in %ds: %s", session.session_name, attempt, SETWD_ATTEMPTS,
                                  SETWD_RETRY_WAIT_S, exc)
                         session.page.wait_for_timeout(SETWD_RETRY_WAIT_S * 1000)
-                log_step("Working directory set to %s in session %s", SESSION_HOME_DIR, session.session_name)
         except Exception:
             launch_failed.add(prefix)
             raise

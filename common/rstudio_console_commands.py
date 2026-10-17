@@ -54,7 +54,7 @@ def _type_command(page, command, marker=None, attempts=3, echo_timeout_ms=10000)
     Enter is pressed again. Raises RuntimeError if it is never taken.
     """
     console_input = page.locator(locators.CONSOLE_INPUT_SELECTOR).first
-    console_input.click(force=True)
+    console_input.click(force=True, timeout=CONSOLE_WAIT_TIMEOUT_MS)
     page.keyboard.type(command)
     page.keyboard.press("Enter")
     if marker is None:
@@ -69,7 +69,7 @@ def _type_command(page, command, marker=None, attempts=3, echo_timeout_ms=10000)
             page.wait_for_timeout(_POLL_INTERVAL_MS)
         if attempt + 1 == attempts:
             break
-        console_input.click(force=True)
+        console_input.click(force=True, timeout=CONSOLE_WAIT_TIMEOUT_MS)
         typed = " ".join(page.locator(locators.CONSOLE_INPUT_TEXT_SELECTOR).first.inner_text(
             timeout=CONSOLE_WAIT_TIMEOUT_MS).split())
         if typed == " ".join(command.split()):

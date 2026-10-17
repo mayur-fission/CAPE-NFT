@@ -1,5 +1,5 @@
 """Like test_concurrent_sessions, but in batches: CONCURRENT_BATCH_SESSIONS
-sessions launched from the UI, named CONCURRENT_BATCH_SESSION_1 .. _<N>,
+sessions launched from the UI, named CONCURRENT_BATCH_1 .. CONCURRENT_BATCH_<N>,
 spread over CONCURRENT_BATCH_SESSIONS_BROWSERS browsers (blank = one browser
 per 5 sessions), all logged in as one user. Each browser starts SCRIPT_PATH
 in all its sessions as soon as its own sessions are launched - it does not
@@ -15,6 +15,8 @@ overall time (first start to last finish, min/avg/max) to
 evidence/rstudio_concurrent_summary_<TIMINGS_LABEL>.json, with the session
 time charts next to the CSV, all attached to Allure.
 """
+import time
+
 import pytest
 
 from common.concurrent_sessions import (
@@ -35,7 +37,7 @@ BROWSER_COUNT = browsers_for(
     SESSION_COUNT, int(env("CONCURRENT_BATCH_SESSIONS_BROWSERS") or env("CONCURRENT_SESSIONS_BROWSERS") or 0)
 )
 # Own names, so this test cannot quit test_concurrent_sessions' sessions
-SESSION_NAMES = concurrent_session_names(SESSION_COUNT, prefix="CONCURRENT_BATCH_SESSION_")
+SESSION_NAMES = concurrent_session_names(SESSION_COUNT, prefix="CONCURRENT_BATCH_")
 # Gap between starting one browser and the next, so their logins don't clash.
 BROWSER_STAGGER_S = int(env("CONCURRENT_SESSIONS_BROWSER_STAGGER_S", "30"))
 LAUNCH_ATTEMPTS = int(env("CONCURRENT_SESSIONS_LAUNCH_ATTEMPTS", "3"))
@@ -47,7 +49,10 @@ OUTPUT_DIR = env_path("OUTPUT_DIR_CONCURRENT_SESSIONS", "CONCURRENT_SESSIONS_OUT
                       "OUTPUT_DIR_GENERATE_CSV", "CSV_SESSIONS_OUTPUT_DIR")
 OUTPUT_FILE_NAME = env("CONCURRENT_SESSIONS_OUTPUT_FILE", "generated_data_10kb.csv")
 SCRIPT_TIMEOUT_MS = int(env("CONCURRENT_SESSIONS_SCRIPT_TIMEOUT_MS", "600000"))
-TIMINGS_LABEL = "concurrent_batch_%d_sessions_%d_browsers_U%d" % (SESSION_COUNT, BROWSER_COUNT, USER)
+# Run start time in the name: every run (and this test running next to
+# test_concurrent_sessions) writes its own CSV, charts and summary
+TIMINGS_LABEL = "concurrent_batch_%d_sessions_%d_browsers_U%d_%s" % (
+    SESSION_COUNT, BROWSER_COUNT, USER, time.strftime("%Y%m%d-%H%M%S"))
 # Slow-session limit drawn on the session time charts (blank = none).
 THRESHOLD_S = float(env("CONCURRENT_SESSIONS_THRESHOLD_S") or 0) or None
 DELETE_OUTPUT = env("CONCURRENT_SESSIONS_DELETE_OUTPUT", "true").lower() != "false"

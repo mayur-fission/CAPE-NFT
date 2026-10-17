@@ -12,6 +12,8 @@ the time per session (common/session_time_report.py) next to the CSV, all
 attached to Allure along with the screenshots. Set
 CONCURRENT_SESSIONS_THRESHOLD_S to mark a slow-session limit on the charts.
 """
+import time
+
 import pytest
 
 from common.concurrent_sessions import (
@@ -41,7 +43,10 @@ OUTPUT_DIR = env_path("OUTPUT_DIR_CONCURRENT_SESSIONS", "CONCURRENT_SESSIONS_OUT
                       "OUTPUT_DIR_GENERATE_CSV", "CSV_SESSIONS_OUTPUT_DIR")
 OUTPUT_FILE_NAME = env("CONCURRENT_SESSIONS_OUTPUT_FILE", "generated_data_10kb.csv")
 SCRIPT_TIMEOUT_MS = int(env("CONCURRENT_SESSIONS_SCRIPT_TIMEOUT_MS", "600000"))
-TIMINGS_LABEL = "concurrent_%d_sessions_%d_browsers_U%d" % (SESSION_COUNT, BROWSER_COUNT, USER)
+# Run start time in the name: every run (and this test running next to the batch
+# test) writes its own CSV, charts and summary instead of overwriting another's
+TIMINGS_LABEL = "concurrent_%d_sessions_%d_browsers_U%d_%s" % (
+    SESSION_COUNT, BROWSER_COUNT, USER, time.strftime("%Y%m%d-%H%M%S"))
 # Slow-session limit drawn on the session time charts (blank = none).
 THRESHOLD_S = float(env("CONCURRENT_SESSIONS_THRESHOLD_S") or 0) or None
 # Delete each session's output once it has been checked, so it does not pile
