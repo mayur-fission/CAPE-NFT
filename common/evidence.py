@@ -38,6 +38,8 @@ def save_screenshot(page, name, always=False):
     """
     if not (SCREENSHOTS_ENABLED or always):
         return
+    if not os.path.splitext(name)[1]:
+        name += ".png"  # Playwright picks the image type from the extension
     path = _evidence_path(name)
     try:
         page.screenshot(path=path)

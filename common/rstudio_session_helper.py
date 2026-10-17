@@ -4,6 +4,7 @@ and launching, opening and quitting sessions.
 Flow: login -> session list -> New Session / open a row -> IDE ready
       ... -> session list -> tick rows -> Quit
 """
+import re
 import time
 from collections import namedtuple
 from contextlib import contextmanager
@@ -207,6 +208,27 @@ def session_row_ids_with_prefix(page, prefixes):
     `prefixes`. `page` must show the session list."""
     prefixes = tuple(prefixes)
     return {row_id for row_id, words in _row_words(page).items() if any(w.startswith(prefixes) for w in words)}
+
+
+def session_names_with_prefix(page, prefixes):
+    """{row id: session name} for the rows whose session name starts with
+    one of `prefixes`. `page` must show the session list."""
+    prefixes = tuple(prefixes)
+    names = {}
+    for row_id, words in _row_words(page).items():
+        matched = sorted(w for w in words if w.startswith(prefixes))
+        if matched:
+            names[row_id] = matched[0]
+    return names
+
+
+def listed_session_names(page, limit=20):
+    """Up to `limit` session names seen on the session list (row words
+    shaped like <WORDS>_<N>), e.g. to show which names exist when a prefix
+    matched none. `page` must show the session list."""
+    shaped = re.compile(r"^[A-Za-z0-9]+(?:_[A-Za-z0-9]+)*_\d+$")
+    seen = sorted({w for words in _row_words(page).values() for w in words if shaped.match(w)})
+    return seen[:limit]
 
 
 def session_status_counts(page):
