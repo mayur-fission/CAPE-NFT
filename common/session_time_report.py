@@ -279,72 +279,93 @@ def build_session_chart(df, out, title, o, sort="session", tz=REPORT_TZ):
 
 def build_timeline_chart(df, out, title, tz=REPORT_TZ):
     """Chart 2: one horizontal bar per session, from its start to its end
-    time, so the overlap (concurrency) between sessions is visible. Returns
-    None (no chart) when the data has no start times."""
+    time, so the overlap (concurrency) between sessions is visible. Every
+    session gets a row: a failed one is drawn in red with "FAIL - <status>"
+    next to it, and one that never started (e.g. its setwd failed) is listed
+    at the bottom. Returns None (no chart) when no session has a start time."""
     _, plt, pd, Patch = _plot_libs()
-    d = df[df["start"].notna()].copy()
-    if d.empty:
+    started = df[df["start"].notna()].copy()
+    if started.empty:
         return None
     # end time: recorded end, else start + time taken, else start (zero length)
-    d["end2"] = d["end"].fillna(d["start"] + pd.to_timedelta(d["time"].fillna(0), unit="s"))
-    d = d.sort_values("start", kind="stable").reset_index(drop=True)
-    n = len(d)
-    t0 = d["start"].min()
-    off = (d["start"] - t0).dt.total_seconds().tolist()
-    dur = (d["end2"] - d["start"]).dt.total_seconds().tolist()
+    started["end2"] = started["end"].fillna(
+        started["start"] + pd.to_timedelta(started["time"].fillna(0), unit="s"))
+    started = started.sort_values("start", kind="stable")
+    not_started = df[df["start"].isna()].copy()
+    d = pd.concat([started, not_started]).reset_index(drop=True)
+    n, n_started = len(d), len(started)
+    t0 = started["start"].min()
+    off = (started["start"] - t0).dt.total_seconds().tolist() + [0.0] * len(not_started)
+    dur = (started["end2"] - started["start"]).dt.total_seconds().tolist() + [0.0] * len(not_started)
     labels = [short_label(s) for s in d["session"]]
     failed = d["failed"].tolist()
     times = d["time"].tolist()
+    statuses = d["status"].tolist()
 
     ok = [t for t, f in zip(times, failed) if not f]
     vmin, vmax = (min(ok), max(ok)) if ok else (None, None)
     colors = [FAIL_C if f else MAX_C if t == vmax else MIN_C if t == vmin else BAR
               for t, f in zip(times, failed)]
 
-    # peak number of sessions running at the same moment
-    events = sorted([(o, 1) for o in off] + [(o + du, -1) for o, du in zip(off, dur)],
+    # peak number of sessions running at the same moment (started ones only)
+    run_off, run_dur = off[:n_started], dur[:n_started]
+    events = sorted([(o, 1) for o in run_off] + [(o + du, -1) for o, du in zip(run_off, run_dur)],
                     key=lambda e: (e[0], e[1]))
     cur = peak = 0
     for _, k in events:
         cur += k
         peak = max(peak, cur)
-    start_spread = max(off)
-    total = max(o + du for o, du in zip(off, dur)) or 1.0
+    start_spread = max(run_off)
+    total = max(o + du for o, du in zip(run_off, run_dur)) or 1.0
+    # a failed session with no duration still gets a short, visible red bar
+    min_w = total * 0.012
+    dur = [max(du, min_w) if f else du for du, f in zip(dur, failed)]
 
     height = min(max(4.5, 0.27 * n + 2.2), 60)
     fig, ax = plt.subplots(figsize=(12, height), dpi=150)
     y = list(range(n))
     ax.barh(y, dur, left=off, color=colors, height=0.72)
     fs = 8 if n <= 30 else 7 if n <= 60 else 5
-    for yi, o, du, t, f, c in zip(y, off, dur, times, failed, colors):
-        txt = "FAIL" if (f and pd.isna(t)) else f"{(t if pd.notna(t) else du):.2f} seconds"
-        ax.text(o + du / 2, yi, txt, ha="center", va="center", fontsize=fs,
-                color="white" if c != BAR else "#1b2a41",
+    for i, (yi, o, du, t, f, c) in enumerate(zip(y, off, dur, times, failed, colors)):
+        if f:
+            # label beside the bar, in red, with why it failed
+            reason = " ".join(str(statuses[i]).split())[:70] or "no time recorded"
+            took = f" after {t:.2f} seconds" if pd.notna(t) else ""
+            txt = (f"FAIL - did not start: {reason}" if i >= n_started
+                   else f"FAIL{took} - {reason}")
+            ax.text(o + du + total * 0.005, yi, txt, ha="left", va="center", fontsize=fs,
+                    color=FAIL_C, fontweight="bold")
+            continue
+        ax.text(o + du / 2, yi, f"{(t if pd.notna(t) else du):.2f} seconds", ha="center", va="center",
+                fontsize=fs, color="white" if c != BAR else "#1b2a41",
                 fontweight="bold" if c != BAR else "normal")
 
     ax.set_yticks(y)
     ax.set_yticklabels(labels, fontsize=9 if n <= 30 else 7 if n <= 60 else 5)
     ax.invert_yaxis()
     ax.set_ylim(n - 0.4, -0.9)
-    ax.set_xlim(-total * 0.01, total * 1.02)
+    ax.set_xlim(-total * 0.01, total * (1.3 if any(failed) else 1.02))
     ax.set_xlabel(f"Seconds since first session started "
                   f"({t0.strftime('%d %b %Y, %H:%M:%S')}, timestamps as recorded in the data)")
-    ax.set_ylabel("Concurrent session (Sessions opened in separate browser tab)")
+    ax.set_ylabel("Concurrent session\n(Sessions opened in separate browser tab)")
     ax.grid(axis="x", alpha=0.3)
     for s in ("top", "right"):
         ax.spines[s].set_visible(False)
 
-    info = (f"Sessions: {n}   |   Peak running at the same time: {peak}   |   "
+    n_failed = sum(1 for f in failed if f)
+    info = (f"Sessions: {n}" + (f" ({n_failed} failed)" if n_failed else "") +
+            f"   |   Peak running at the same time: {peak}   |   "
             f"Start spread (first to last start): {start_spread:.2f} seconds   |   "
             f"Total test duration: {total:.2f} seconds")
     ax.set_title(f"{title}: start to end timeline", loc="left", fontweight="bold", pad=22)
     ax.text(0, 1.008, info, transform=ax.transAxes, ha="left", va="bottom",
             fontsize=9, color="#555")
+    # legend a fixed ~0.9 inch below the axes, under the x-axis label, whatever the chart height
     ax.legend(handles=_legend_handles(Patch), loc="upper left",
-              bbox_to_anchor=(0, -0.07 if n <= 60 else -0.05), fontsize=8, frameon=False, ncol=4)
+              bbox_to_anchor=(0, -0.9 / height), fontsize=8, frameon=False, ncol=4)
     fig.text(0.01, 0.005, f"Generated: {_now_stamp(tz)}", fontsize=8, color="#666")
     plt.tight_layout(rect=(0, 0.02, 1, 1))
-    fig.savefig(out)
+    fig.savefig(out, bbox_inches="tight")
     plt.close(fig)
     return dict(peak_concurrent=peak, start_spread=start_spread, total_duration=total)
 

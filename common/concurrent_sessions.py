@@ -25,7 +25,12 @@ from common.api_ui_combo import (
     run_in_parallel_browsers,
 )
 from common.config import EVIDENCE_DIR, env, env_path
-from common.launch_already_created_sessions import close_launched_sessions, run_script_in_launched_sessions
+from common.launch_already_created_sessions import (
+    SETWD_ATTEMPTS,
+    SETWD_RETRY_WAIT_S,
+    close_launched_sessions,
+    run_script_in_launched_sessions,
+)
 from common.session_actions import set_session_working_directory
 from common.step_log import log_step
 
@@ -147,7 +152,17 @@ def _run_script_in_browser(context, prefix, session_names, user, label, ready, d
             )
             assert not failed, "sessions that failed to launch: %s" % failed
             for session in launched:
-                set_session_working_directory(session.page, path=SESSION_HOME_DIR)
+                for attempt in range(1, SETWD_ATTEMPTS + 1):
+                    try:
+                        set_session_working_directory(session.page, path=SESSION_HOME_DIR)
+                        break
+                    except Exception as exc:
+                        if attempt == SETWD_ATTEMPTS:
+                            raise
+                        log_step("Could not set the working directory in session %s (attempt %d of %d), "
+                                 "retrying in %ds: %s", session.session_name, attempt, SETWD_ATTEMPTS,
+                                 SETWD_RETRY_WAIT_S, exc)
+                        session.page.wait_for_timeout(SETWD_RETRY_WAIT_S * 1000)
                 log_step("Working directory set to %s in session %s", SESSION_HOME_DIR, session.session_name)
         except Exception:
             launch_failed.add(prefix)

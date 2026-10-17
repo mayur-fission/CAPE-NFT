@@ -26,6 +26,10 @@ OPEN_SESSION_TIMEOUT_MS = int(env("OPEN_SESSION_TIMEOUT_MS", "120000"))
 # How long to wait, after the IDE shows, for the console to answer commands
 # (a resumed session may still be restoring its workspace).
 CONSOLE_READY_TIMEOUT_MS = int(env("CONSOLE_READY_TIMEOUT_MS", "120000"))
+# Tries (and the wait between them) for setting a session's working
+# directory before its script runs
+SETWD_ATTEMPTS = int(env("SETWD_ATTEMPTS", "2"))
+SETWD_RETRY_WAIT_S = int(env("SETWD_RETRY_WAIT_S", "10"))
 
 # page is the tab showing the session's IDE (None if it failed to open);
 # launch is the SessionLaunch from open_existing_session(); error is None
@@ -110,16 +114,25 @@ def run_script_in_launched_sessions(launched, script_path, working_dir=None, tim
             record["status"] = "open failed: %s" % session.error
             continue
         session_dir = posixpath.join(working_dir, session.session_name) if per_session_dir else None
-        try:
-            if session_dir:
-                recreate_session_folder(session.page, working_dir, session.session_name)
-            if set_session_working_directory(session.page, path=session_dir or working_dir):
-                log_step("Working directory set to %s in session %s%s", session_dir or working_dir,
-                         session.session_name, " (the script's output goes here)" if session_dir else "")
-            ready.append((session.page, record, session_dir))
-        except Exception as exc:
-            record["status"] = "setwd failed: %s" % exc
-            log_step("Could not set the working directory in session %s: %s", session.session_name, exc)
+        for attempt in range(1, SETWD_ATTEMPTS + 1):
+            try:
+                if session_dir:
+                    recreate_session_folder(session.page, working_dir, session.session_name)
+                if set_session_working_directory(session.page, path=session_dir or working_dir):
+                    log_step("Working directory set to %s in session %s%s", session_dir or working_dir,
+                             session.session_name, " (the script's output goes here)" if session_dir else "")
+                ready.append((session.page, record, session_dir))
+                break
+            except Exception as exc:
+                # A tab that is busy (many tabs open) can miss one console read; try again
+                if attempt < SETWD_ATTEMPTS:
+                    log_step("Could not set the working directory in session %s (attempt %d of %d), "
+                             "retrying in %ds: %s", session.session_name, attempt, SETWD_ATTEMPTS,
+                             SETWD_RETRY_WAIT_S, exc)
+                    session.page.wait_for_timeout(SETWD_RETRY_WAIT_S * 1000)
+                    continue
+                record["status"] = "setwd failed: %s" % exc
+                log_step("Could not set the working directory in session %s: %s", session.session_name, exc)
 
     def _on_done(page, record, session_dir):
         if output_path:

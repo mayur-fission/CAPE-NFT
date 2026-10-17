@@ -9,6 +9,7 @@ import time
 from common import locators
 from common.evidence import save_output_file, save_screenshot
 from common.rstudio_console_commands import (
+    get_console_output,
     get_file_size,
     get_folder_size,
     r_source_command,
@@ -373,8 +374,12 @@ def check_output_file(page, record, output_path, delete=False, remove_dir=None):
 
 def _delete_output(page, record, output_path, delete, remove_dir=None):
     """check_output_file()'s clean-up: delete(page, output_path) (a file or
-    folder helper), then remove `remove_dir` if that left it empty. A
-    failure sets record["status"] unless it already holds an error.
+    folder helper), then remove `remove_dir` if that left it empty.
+
+    A failure is only logged as a warning (record["delete_failed"]): the
+    script finished and its output was verified before this, so the run
+    stays "ok" - deleting is housekeeping, and with many tabs open a busy
+    tab can miss the console read it needs.
     """
     try:
         if not delete(page, output_path):
@@ -388,9 +393,9 @@ def _delete_output(page, record, output_path, delete, remove_dir=None):
             )
         log_step("Output %s deleted from session %s", output_path, record["session_name"])
     except Exception as exc:
-        log_step("Could not delete output %s from session %s: %s", output_path, record["session_name"], exc)
-        if record["status"] == "ok":
-            record["status"] = "could not delete %s: %s" % (output_path, exc)
+        record["delete_failed"] = str(exc)
+        log_step("WARNING: could not delete output %s from session %s (the run still counts as ok; "
+                 "delete it by hand): %s", output_path, record["session_name"], exc)
 
 
 def report_output_file(page, record, output_path):
@@ -400,7 +405,7 @@ def report_output_file(page, record, output_path):
     left in place since the script may still have been writing it.
     """
     try:
-        console = page.locator(locators.CONSOLE_OUTPUT_SELECTOR).inner_text()
+        console = get_console_output(page)
         print("\n[rstudio-local] session %s: console at the timeout (last 40 lines):\n%s"
               % (record["session_name"], "\n".join(console.splitlines()[-40:])))
     except Exception as exc:

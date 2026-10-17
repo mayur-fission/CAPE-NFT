@@ -10,8 +10,13 @@ import re
 import time
 
 from common import locators
+from common.config import env
 
 _POLL_INTERVAL_MS = 200
+# How long a console read waits for the console to be on the page. With many
+# tabs a busy or reconnecting tab can drop it for a while; Playwright's
+# default (30s) then failed steps like setwd or deleting an output file.
+CONSOLE_WAIT_TIMEOUT_MS = int(env("CONSOLE_WAIT_TIMEOUT_MS", "120000"))
 
 _marker_seq = itertools.count()
 # Ends every value read_console_value() prints, so a half-printed line is
@@ -65,7 +70,8 @@ def _type_command(page, command, marker=None, attempts=3, echo_timeout_ms=10000)
         if attempt + 1 == attempts:
             break
         console_input.click(force=True)
-        typed = " ".join(page.locator(locators.CONSOLE_INPUT_TEXT_SELECTOR).first.inner_text().split())
+        typed = " ".join(page.locator(locators.CONSOLE_INPUT_TEXT_SELECTOR).first.inner_text(
+            timeout=CONSOLE_WAIT_TIMEOUT_MS).split())
         if typed == " ".join(command.split()):
             print("[rstudio-local] console command not submitted, pressing Enter again")
         else:
@@ -101,7 +107,7 @@ def read_console_value(page, r_expr, timeout_ms=10000):
     console = page.locator(locators.CONSOLE_OUTPUT_SELECTOR)
     deadline = time.time() + timeout_ms / 1000.0
     while time.time() < deadline:
-        match = pattern.search(console.inner_text())
+        match = pattern.search(console.inner_text(timeout=CONSOLE_WAIT_TIMEOUT_MS))
         if match:
             return match.group(1).strip()
         page.wait_for_timeout(_POLL_INTERVAL_MS)
@@ -130,7 +136,7 @@ def _read_console_block(page, r_statements, timeout_ms, what):
     console = page.locator(locators.CONSOLE_OUTPUT_SELECTOR)
     deadline = time.time() + timeout_ms / 1000.0
     while time.time() < deadline:
-        match = pattern.search(console.inner_text())
+        match = pattern.search(console.inner_text(timeout=CONSOLE_WAIT_TIMEOUT_MS))
         if match:
             return match.group(1)
         page.wait_for_timeout(_POLL_INTERVAL_MS)
@@ -295,7 +301,7 @@ def wait_for_console_ready(page, timeout_ms=120000, probe_interval_ms=15000, pol
         markers.append(submit_console_command(page, "invisible(NULL)", confirm=False)[0])
         probe_deadline = min(deadline, time.time() + probe_interval_ms / 1000.0)
         while time.time() < probe_deadline:
-            output = page.locator(locators.CONSOLE_OUTPUT_SELECTOR).inner_text()
+            output = get_console_output(page)
             if any(marker in output for marker in markers):
                 return time.time() - started
             page.wait_for_timeout(poll_interval_ms)
@@ -319,4 +325,4 @@ def run_console_command(page, command, timeout_ms=300000, poll_interval_ms=500):
 
 def get_console_output(page):
     """Full text currently in the console output pane."""
-    return page.locator(locators.CONSOLE_OUTPUT_SELECTOR).inner_text()
+    return page.locator(locators.CONSOLE_OUTPUT_SELECTOR).inner_text(timeout=CONSOLE_WAIT_TIMEOUT_MS)
