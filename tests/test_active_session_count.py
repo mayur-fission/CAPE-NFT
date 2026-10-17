@@ -23,11 +23,11 @@ from datetime import datetime
 
 import pytest
 
-from common.config import EVIDENCE_DIR, REPO_ROOT, env, env_list
+from config.config import EVIDENCE_DIR, REPO_ROOT, env, env_list
 from common.evidence import save_screenshot
 from common.rstudio_session_helper import goto_session_list, stable_session_status_counts
 from common.session_actions import login_to_posit_workbench
-from config.perf_report import attach_allure_file
+from common.perf_report import attach_allure_file
 
 pytestmark = pytest.mark.rstudio_local
 

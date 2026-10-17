@@ -1,34 +1,12 @@
-"""Posit Workbench browser automation: sign-in, working directory, folder
-and file management, and creating a project from an existing directory.
-
-Console commands live in rstudio_console_commands.py, text files in
-rstudio_text_operations.py, and session launch/quit in
-rstudio_session_helper.py.
+"""Inside a session IDE: working directory, files and folders (through
+the console), the editor, and creating a project from an existing folder.
 """
 import posixpath
 import time
 from collections import namedtuple
 
 from common import locators
-from common.config import env
 from common.rstudio_console_commands import r_string, read_console_value, run_console_command
-
-
-def login(page, base_url, username=None, password=None):
-    """Sign `page` into base_url and return the session list URL.
-    Credentials default to RSTUDIO_USER1/RSTUDIO_PASSWORD.
-    """
-    username = username or env("RSTUDIO_USER1", required=True)
-    password = password or env("RSTUDIO_PASSWORD", required=True)
-
-    sign_in_url = base_url if base_url.endswith("/auth-sign-in") else base_url + "/auth-sign-in"
-    page.goto(sign_in_url)
-    page.locator(locators.USERNAME_INPUT).fill(username)
-    page.locator(locators.PASSWORD_INPUT).fill(password)
-    page.get_by_role("button", name=locators.SIGN_IN_BUTTON).click()
-    page.get_by_text(locators.NEW_SESSION_TEXT, exact=True).first.wait_for(state="visible", timeout=50000)
-    page.wait_for_timeout(2000)  # the session table re-renders shortly after
-    return page.url
 
 
 def set_working_directory(page, path, timeout_ms=10000):
@@ -122,8 +100,6 @@ def recreate_session_folder(page, working_dir, session_name, timeout_ms=30000):
         raise RuntimeError("could not remove and recreate %s" % path)
     print("\n[rstudio-local] session %s: removed earlier test data, %s is empty" % (session_name, path))
     return path
-
-
 
 
 ProjectCreation = namedtuple("ProjectCreation", ["elapsed_s", "working_directory"])

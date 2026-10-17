@@ -1,12 +1,12 @@
-"""Retry and login staggering shared by every multi-session flow, so they all
-use the same retry budget and backoff.
+"""Retry with backoff, and login spacing across threads and processes
+(Workbench fails sign-ins that land at the same moment).
 """
 import os
 import threading
 import time
 from contextlib import contextmanager
 
-from common.config import EVIDENCE_DIR, env
+from config.config import EVIDENCE_ROOT, env
 
 LAUNCH_ATTEMPTS = 3
 
@@ -18,8 +18,8 @@ _LOGIN_MIN_GAP_S = 3.0
 # that shares the workspace (e.g. tests run in parallel by Jenkins with
 # RUN_IN_PARALLEL), see wait_for_login_slot().
 LOGIN_MIN_INTERVAL_S = float(env("LOGIN_MIN_INTERVAL_S", str(_LOGIN_MIN_GAP_S)))
-_LOGIN_SLOT_LOCK = os.path.join(EVIDENCE_DIR, ".login_slot.lock")
-_LOGIN_SLOT_LAST = os.path.join(EVIDENCE_DIR, ".login_slot_last")
+_LOGIN_SLOT_LOCK = os.path.join(EVIDENCE_ROOT, ".login_slot.lock")
+_LOGIN_SLOT_LAST = os.path.join(EVIDENCE_ROOT, ".login_slot_last")
 # A lock file older than this was left by a killed process.
 _LOGIN_SLOT_LOCK_STALE_S = 600
 

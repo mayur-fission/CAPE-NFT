@@ -1,6 +1,6 @@
 """Source a large R script in already-existing RStudio Pro session(s) - one
 (SESSION_NAME) or CONCURRENT_SESSION_NAMES at once, each in its own isolated
-browser - and capture run time plus best-effort server/DB metrics.
+browser - and capture the run time.
 
 Every session named must already be on the session list, with the sourced
 script (R_SOURCE_COMMAND_EXISTING_SESSIONS in .env) in WORKING_DIR; nothing
@@ -8,20 +8,10 @@ is created.
 """
 import pytest
 
-from common.config import env, env_list, env_path
-from common.helper_function import (
-    capture_server_and_db_metrics,
-    describe_script_runs,
-    failed,
-    is_headless,
-    login_and_snapshot,
-    mean,
-    optional_int,
-    otel_sample,
-    otel_samples,
-    print_results,
-)
-from common.otel_metrics import capture_otel_metrics
+from config.config import env, env_list, env_path
+from config.config import is_headless, optional_int
+from common.session_actions import login_and_snapshot
+from common.result_printing import describe_script_runs, failed, print_results
 from common.script_timings import (
     run_timed_console_command,
     script_timings_csv_path,
@@ -36,7 +26,6 @@ pytestmark = pytest.mark.rstudio_local
 SESSION_NAME = env("RSTUDIO_SCRIPT_SESSION_NAME", "AUTO_SESSION_1")
 SOURCE_COMMAND = env_path("R_SOURCE_COMMAND_EXISTING_SESSIONS", "RSTUDIO_SCRIPT_SOURCE_COMMAND")
 SCRIPT_TIMEOUT_MS = int(env("RSTUDIO_SCRIPT_TIMEOUT_MS", "300000"))
-METRICS_WINDOW_MINUTES = int(env("RSTUDIO_METRICS_WINDOW_MINUTES", "5"))
 WORKING_DIR = env_path("WORKING_DIR_EXISTING_SESSIONS", "RSTUDIO_SCRIPT_WORKING_DIR", "RSTUDIO_WORKING_DIR")
 
 # Concurrent variant: RSTUDIO_SCRIPT_SESSION_NAMES (comma-separated) overrides
@@ -55,8 +44,8 @@ def test_existing_session_source_large_script_time(page):
     """SESSION_NAME sources SOURCE_COMMAND once; the run is timed.
     Writes evidence/rstudio_script_timings_source_large_script.csv.
 
-    Flow: login -> open existing session -> setwd -> run script -> capture
-    metrics -> quit any session the run created
+    Flow: login -> open existing session -> setwd -> run script ->
+    quit any session the run created
     """
     home_url, before_ids = login_and_snapshot(page)
     script_runs = []
@@ -75,12 +64,6 @@ def test_existing_session_source_large_script_time(page):
         )
         assert script_elapsed_s > 0
 
-        capture_server_and_db_metrics(METRICS_WINDOW_MINUTES)
-        capture_otel_metrics(
-            [otel_sample(1, script_elapsed_s, launch.bytes_received)],
-            run_elapsed=launch.elapsed_s + script_elapsed_s,
-            scenario="source_large_script",
-        )
     finally:
         write_script_timings_csv(script_timings_csv_path("source_large_script"), script_runs)
         cleanup_and_verify_sessions(page, home_url, before_ids)
@@ -93,7 +76,7 @@ def test_existing_sessions_source_script_concurrently_time(page, request):
     Writes evidence/rstudio_script_timings_source_script_concurrent_users.csv.
 
     Flow: login -> per session in parallel: open browser -> login -> open
-    existing session -> setwd -> run script -> capture metrics -> quit any
+    existing session -> setwd -> run script -> quit any
     session the run created
     """
     home_url, before_ids = login_and_snapshot(page)
@@ -116,12 +99,6 @@ def test_existing_sessions_source_script_concurrently_time(page, request):
         failures = failed(results)
         assert not failures, "one or more concurrent users failed: %s" % failures
 
-        capture_server_and_db_metrics(METRICS_WINDOW_MINUTES)
-        capture_otel_metrics(
-            otel_samples(results, lambda r: mean(r["run_elapsed_s"])),
-            run_elapsed=run_elapsed,
-            scenario="source_script_concurrent_users",
-        )
     finally:
         write_script_timings_csv(script_timings_csv_path("source_script_concurrent_users"), script_runs)
         cleanup_and_verify_sessions(page, home_url, before_ids)

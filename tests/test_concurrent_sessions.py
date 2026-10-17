@@ -16,15 +16,13 @@ import time
 
 import pytest
 
-from common.concurrent_sessions import (
-    browsers_for,
-    concurrent_session_names,
-    run_script_in_concurrent_sessions,
-    summarize_concurrent_runs,
-)
-from common.config import env, env_path
+from common.concurrent_sessions import run_script_in_concurrent_sessions
+from common.result_printing import summarize_concurrent_runs
+from common.parallel_browsers import browsers_for
+from config.config import env, env_path
 from common.script_timings import script_timings_csv_path, write_script_timings_csv
 from common.session_time_report import describe_run, generate_session_time_report
+from common.session_naming_logic import concurrent_session_names
 
 pytestmark = pytest.mark.rstudio_local
 
@@ -77,6 +75,6 @@ def test_concurrent_sessions_run_r_script_in_multiple_browsers(
     generate_session_time_report(
         timings_csv, threshold=THRESHOLD_S, browser=browser_name,
         test_name=describe_run(SESSION_COUNT, BROWSER_COUNT, USER),
-        notes=SCRIPT_PATH,
+        script=SCRIPT_PATH,
     )
     assert not errors, "\n".join(errors)

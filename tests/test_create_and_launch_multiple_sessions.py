@@ -4,11 +4,13 @@ and force-quits every session created.
 """
 import pytest
 
-from common.config import env
-from common.helper_function import format_timings, login_and_plan_session_names
-from common.rstudio_session_helper import AUTO_PERF_NAME_PREFIX, is_session_alive
+from config.config import env
+from common.session_actions import login_and_plan_session_names
+from common.result_printing import format_timings
+from common.rstudio_session_helper import is_session_alive
 from common.session_actions import launch_session
 from common.session_cleanup import cleanup_and_verify_sessions
+from common.session_naming_logic import AUTO_PERF_NAME_PREFIX
 
 pytestmark = pytest.mark.rstudio_local
 

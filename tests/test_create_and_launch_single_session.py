@@ -3,7 +3,7 @@ Records the launch time and force-quits the session.
 """
 import pytest
 
-from common.helper_function import login_and_snapshot
+from common.session_actions import login_and_snapshot
 from common.rstudio_session_helper import is_session_alive
 from common.session_actions import launch_session
 from common.session_cleanup import cleanup_and_verify_sessions

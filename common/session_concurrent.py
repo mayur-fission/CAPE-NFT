@@ -1,9 +1,9 @@
-"""Run sessions truly in parallel to simulate several users at once. Each
-worker drives its own isolated Playwright browser (the sync API can't be
-shared across threads), and logins are staggered so they don't collide.
+"""Several users at once: each worker runs its own isolated browser
+(the sync API cannot share one across threads), with staggered logins and
+whole-flow retries.
 
-Workers retry their whole flow up to LAUNCH_ATTEMPTS times, reusing their
-reserved session name. Callers diff row ids and clean up afterwards.
+Flow per user: own browser -> login -> launch (+ project / text files /
+               script) -> results
 """
 import concurrent.futures
 import time
@@ -11,8 +11,7 @@ from contextlib import contextmanager
 
 from playwright.sync_api import sync_playwright
 
-from common.config import browser_window_args, default_session_count, env, env_path, max_workers_for
-from common.rstudio_session_helper import next_auto_perf_session_names
+from config.config import browser_window_args, default_session_count, env, env_path, max_workers_for
 from common.rstudio_text_operations import create_text_file
 from common.script_timings import run_timed_console_command_repeatedly
 from common.session_actions import (
@@ -27,8 +26,8 @@ from common.session_scenarios import (
     default_run_script_timeout_ms,
     launch_with_project_and_text_file,
     launch_with_project_and_text_files,
-    next_run_r_session_names,
 )
+from common.session_naming_logic import next_auto_perf_session_names, next_run_r_session_names
 
 
 @contextmanager

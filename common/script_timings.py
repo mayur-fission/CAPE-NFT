@@ -1,19 +1,17 @@
-"""Per-run R script timings: run console commands while recording each one's
-start/end time and status, wait for several runs at once, and write the
-records to a CSV under evidence/.
+"""Per-run R script timings: run console commands recording start/end
+and status, wait for several runs at once, write the CSV.
 
-A run record is a dict with "session_name", "started", "ended" (epoch
-seconds; "ended" stays None unless the run finished) and "status" ("ok",
-"timed out" or an error message).
+A run record: {"session_name", "started", "ended" (None unless finished),
+"status" ("ok", "timed out" or an error)}.
 """
 import os
 import time
 from datetime import datetime
 
-from config.perf_report import write_csv_report
+from common.perf_report import write_csv_report
 
 from common import locators
-from common.config import EVIDENCE_DIR, env
+from config.config import EVIDENCE_DIR, env
 from common.evidence import save_screenshot
 from common.step_log import log_step
 from common.rstudio_console_commands import (
@@ -136,33 +134,16 @@ def _reopen_crashed_tab(page, timeout_ms=180000):
 
 def wait_for_console_runs(pending, timeout_ms, poll_interval_ms=500, on_done=None, on_timeout=None,
                           on_poll=None, what=None):
-    """Poll submitted console commands until each has finished or run for
-    `timeout_ms`, so commands in several tabs run concurrently.
+    """Poll submitted commands (page, marker, record, context) until each
+    finishes, errors or reaches `timeout_ms`, so several tabs run at once.
 
-    `pending` holds (page, marker, record, context) tuples, where marker
-    comes from submit_console_command() and record["started"] is set. Each
-    record ends as "ok" (with "ended"), "timed out", or the error raised
-    while checking it. on_done/on_timeout(page, record, context) run when a
-    command finishes / times out (on_done may set an error status, e.g. for
-    a missing output file); a command that stops with an R error ends as
-    "R error: <message>" straight away; on_poll() runs once per round - keep it quick.
-    Each console is screenshotted after its command finishes
-    (console_output_<session name>.png, before on_done) or times out
-    (console_timeout_<session name>.png). With `what` (e.g. "R script
-    x.R"), each finish, R error and timeout is logged with log_step().
+    Flow: poll every console -> record end time / "R error: ..." / "timed out"
+          -> (all done) screenshots + on_done / on_timeout per tab
 
-    The polling loop only checks consoles and records end times; the
-    screenshots and on_done/on_timeout run once every command has finished
-    or timed out. Doing them in the loop (seconds each, e.g. checking and
-    deleting an output file) would delay checking the other tabs of the
-    browser, so each later tab's end time - and its "time taken" - would
-    grow by the time spent on the tabs before it.
-
-    A tab whose renderer crashes (e.g. the browser host ran out of memory)
-    is reopened up to CONSOLE_TAB_CRASH_REOPENS times and checked again -
-    the command keeps running on the server meanwhile, so its end time is
-    when the reopened tab first shows it finished. record["reopens"] counts
-    them; the page passed to on_done/on_timeout is the reopened one.
+    The loop only records end times; screenshots and on_done (seconds each,
+    e.g. output checks) run afterwards, so they cannot delay - and inflate -
+    the next tab's end time. A crashed tab is reopened (CONSOLE_TAB_CRASH_REOPENS)
+    and checked again. on_poll() runs once per round.
     """
     what_ = what or "The command"
     pending = list(pending)

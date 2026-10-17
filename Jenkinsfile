@@ -29,37 +29,69 @@
 // Test file (without .py) -> checkbox description, in the order shown in Jenkins.
 // No `def`: a script-level `def` is not reliably visible inside pipeline blocks.
 TEST_FILES = [
-    // First, so its checkbox sits right below RUN_ALL.
-    'test_active_session_count'                           :
-        'Count Active + Executing sessions every 10 s. It logs in first, the other ticked tests ' +
-        'start once it has (it runs alongside them), and it stops when they all finish or after ACTIVE_SESSIONS_MONITOR_S (20 min)',
-    'test_run_r_close_browser'                            : 'Scripts and Workbench jobs keep running after the tab closes',
-    'test_run_r_close_browser_batch_execution'            :
-        'Like test_run_r_close_browser, in batches: each browser starts the R script in its sessions as soon as they are ' +
-        'launched, closes the tabs and watches for dropped sessions; stop + cleanup once every browser is done',
-    'test_167'                                            : 'US 167 - high-throughput script, timed',
-    'test_167_multiple_times'                             :
+    // --- First, so its checkbox sits right below RUN_ALL
+    'test_active_session_count'                         :
+        'Count Active + Executing sessions every 10 s. It logs in first, the other ticked tests start once it has ' +
+        '(it runs alongside them), and it stops when they all finish or after ACTIVE_SESSIONS_MONITOR_S (20 min)',
+    // --- Session basics
+    'test_create_and_launch_single_session'             : 'One new session reaches an active IDE; launch time recorded',
+    'test_create_and_launch_multiple_sessions'          :
+        'SESSION_COUNT new sessions launched one after another each reach an active IDE',
+    'test_create_and_launch_multiple_sessions_user1'    :
+        'User 1 creates SESSION_COUNT sessions (AUTO_SESSION_U1_<N>) and runs an R script in them',
+    'test_create_and_launch_multiple_sessions_user2'    :
+        'User 2 creates SESSION_COUNT sessions (AUTO_SESSION_U2_<N>) and runs an R script in them',
+    'test_two_user_login'                               :
+        'Users 1 and 2 signed in at once, each in its own browser context (creates no sessions)',
+    'test_rstudio_sessions'                             : 'Sessions stay alive while idle (file list polled), then are quit',
+    // --- High-throughput R script
+    'test_167'                                          : 'US 167 - high-throughput script, timed',
+    'test_167_multiple_times'                           :
         'US 167 - the test_167 run repeated HTP_REPEAT_RUNS times, HTP_REPEAT_WAIT_S seconds apart',
-    'test_168'                                            : 'US 168 - high-throughput script, timed',
-    'test_launch_sessions_api_user1'                      : 'Create / relaunch sessions through the API only',
-    'test_create_session_through_api_and_run_script'      : 'API-created sessions driven in the browser',
-    'test_create_session_through_api_and_run_script_group': 'API-created sessions, mixed workloads',
-    'test_create_session_through_ui_and_run_script_group' : 'UI-created sessions, mixed workloads',
-    'test_create_session_through_ui_and_run_script_group_multi_browser':
-        'UI-created sessions, mixed workloads, in UI_BROWSERS browsers launching in parallel (B1_, B2_, ... name prefixes)',
-    'test_launch_existing_session_and_run_r_scripts'      : 'Reuse existing API sessions',
-    'test_concurrent_sessions'                            :
-        'CONCURRENT_SESSIONS UI-created sessions (CONCURRENT_SESSION_1, _2, ...) over CONCURRENT_SESSIONS_BROWSERS browsers, ' +
-        'R script sourced in all at once and timed, with session time charts',
-    'test_concurrent_sessions_batch_execution'            :
-        'Like test_concurrent_sessions (same CONCURRENT_SESSIONS settings), but each browser starts the R script as soon as ' +
-        'its own sessions are launched; cleanup waits until every browser has finished',
-    'test_concurrent_sessions_10min'                      :
-        'CONCURRENT_10MIN_SESSIONS UI-created sessions run the ~10 minute R script (htp_10min.R) at once, timed, with charts',
-    'test_concurrent_sessions_30min'                      :
-        'CONCURRENT_30MIN_SESSIONS UI-created sessions run the ~30 minute R script (htp_30min.R) at once, timed, with charts',
-    'test_delete_sessions'                                :
-        'Housekeeping: quit every AUTO_PERF_SESSION_* session (bulk Quit) - also ones another running test is using',
+    'test_168'                                          : 'US 168 - high-throughput script, timed',
+    'test_run_high_throughput_job'                      :
+        'High-throughput script in new sessions: left running after the tab closes, or timed to completion',
+    // --- Sessions left running with their tabs closed
+    'test_run_r_close_browser'                          : 'Scripts and Workbench jobs keep running after the tab closes',
+    'test_run_r_close_browser_batch_execution'          :
+        'Like test_run_r_close_browser, in batches: each browser starts the R script in its sessions as soon as ' +
+        'they are launched, closes the tabs and watches for dropped sessions; stop + cleanup once every browser is ' +
+        'done',
+    // --- Concurrent sessions over several browsers
+    'test_concurrent_sessions'                          :
+        'CONCURRENT_SESSIONS UI-created sessions (CONCURRENT_SESSION_1, _2, ...) over CONCURRENT_SESSIONS_BROWSERS ' +
+        'browsers, R script sourced in all at once and timed, with session time charts',
+    'test_concurrent_sessions_batch_execution'          :
+        'Like test_concurrent_sessions (same CONCURRENT_SESSIONS settings), but each browser starts the R script ' +
+        'as soon as its own sessions are launched; cleanup waits until every browser has finished',
+    'test_concurrent_sessions_10min'                    :
+        'CONCURRENT_10MIN_SESSIONS UI-created sessions run the ~10 minute R script (htp_10min.R) at once, timed, ' +
+        'with charts',
+    'test_concurrent_sessions_30min'                    :
+        'CONCURRENT_30MIN_SESSIONS UI-created sessions run the ~30 minute R script (htp_30min.R) at once, timed, ' +
+        'with charts',
+    // --- UI-created sessions with mixed workloads
+    'test_create_session_through_ui_and_run_script_group' :
+        'UI-created sessions, mixed workloads',
+    'test_create_session_through_ui_and_run_script_group_multi_browser' :
+        'UI-created sessions, mixed workloads, in UI_BROWSERS browsers launching in parallel (B1_, B2_, ... name ' +
+        'prefixes)',
+    // --- Workbench API
+    'test_launch_sessions_api_user1'                    : 'Create / relaunch sessions through the API only',
+    'test_create_session_through_api_and_run_script'    : 'API-created sessions driven in the browser',
+    'test_create_session_through_api_and_run_script_group' :
+        'API-created sessions, mixed workloads',
+    'test_launch_existing_session_and_run_r_scripts'    : 'Reuse existing API sessions',
+    // --- Performance (JSON / CSV / Allure reports)
+    'test_rstudio_session_perf'                         :
+        'Session launch time (single / sequential / concurrent) and launch + project + text-file scenarios',
+    'test_rstudio_run_r_script_perf'                    :
+        'R script run time in new Run_R_session_<N> sessions, once or RUN_COUNT times, one or several users',
+    'test_rstudio_source_script_perf'                   : 'Large R script sourced in already-existing session(s), timed',
+    // --- Housekeeping - last
+    'test_delete_sessions'                              :
+        'Housekeeping: quit every AUTO_PERF_SESSION_* session (bulk Quit) - also ones another running test is ' +
+        'using',
 ]
 TEST_NAMES = new ArrayList(TEST_FILES.keySet())
 // The test USE_EC2_NODES spreads over the NODE_LABELS agents.
@@ -263,7 +295,7 @@ def setupPython() {
 }
 
 // Copy the ENVIRONMENT's .env into the workspace (the tests load it from the
-// repo root, common/config.py) and drop the last build's results, since the
+// repo root, config/config.py) and drop the last build's results, since the
 // workspace is reused between builds. Call inside withCredentials(ENV_FILE).
 // SESSION_COUNT, HIGH_THROUGHPUT_DURATION_S and the evidence switches
 // (SCREENSHOT_ALL_STEPS, CAPTURE_TEST_DATA) are appended to .env rather than
@@ -284,7 +316,7 @@ def prepareWorkspace() {
         // copy writable, since the overrides below are appended to it.
         sh 'rm -f .env && cp "$ENV_FILE" .env && chmod 600 .env'
         sh "printf '\\n%s\\n' ${overrides.collect { "'${it}'" }.join(' ')} >> .env"
-        sh "rm -rf evidence/junit*.xml evidence/*.png evidence/output_* evidence/allure-results evidence/.login_slot.lock ${STOP_FILE} ${READY_FILE}"
+        sh "rm -rf evidence/runs evidence/junit*.xml evidence/*.png evidence/output_* evidence/allure-results evidence/.login_slot.lock ${STOP_FILE} ${READY_FILE}"
     } else {
         bat '(if exist .env del /F /Q .env) && copy /Y "%ENV_FILE%" .env && attrib -R .env'
         bat "(echo.${overrides.collect { "& echo ${it}" }.join('')})>> .env"
@@ -296,6 +328,7 @@ def prepareWorkspace() {
             if exist evidence\\.active_sessions_stop del /F /Q evidence\\.active_sessions_stop
             if exist evidence\\.active_sessions_ready del /F /Q evidence\\.active_sessions_ready
             if exist evidence\\allure-results rmdir /S /Q evidence\\allure-results
+            if exist evidence\\runs rmdir /S /Q evidence\\runs
             exit /b 0
         '''
     }
@@ -400,7 +433,7 @@ def sendResultEmail() {
 
 // The command that starts pytest with the agent's Python (pyPath). HEADED on a
 // Linux agent runs it under Xvfb, a virtual screen, since a server has no
-// display; BROWSER_WINDOW_SIZE sizes the windows there (common/config.py).
+// display; BROWSER_WINDOW_SIZE sizes the windows there (config/config.py).
 def pytestCommand(String pyPath) {
     if (params.HEADED?.toString() == 'true' && isUnix()) {
         if (sh(script: 'command -v xvfb-run', returnStatus: true) != 0) {
@@ -511,7 +544,7 @@ pipeline {
 
         stage('Run tests') {
             steps {
-                // The tests load .env from the repo root (common/config.py).
+                // The tests load .env from the repo root (config/config.py).
                 // Dev -> 'cape-nft-env-dev', QA -> 'cape-nft-env-qa'.
                 // Settings for the group tests; .env overrides them if it sets the same names.
                 withEnv([
@@ -759,14 +792,15 @@ pipeline {
     post {
         always {
             junit testResults: 'evidence/junit*.xml', allowEmptyResults: true
-            // Always: reports, timings, metrics and session time charts
-            // (common/session_time_report.py), and the failure screenshots of
-            // tests using the page fixture (test-results/); every screenshot is in Allure.
-            archiveArtifacts artifacts: 'evidence/**/*.csv, evidence/**/*.json, evidence/rstudio_script_timings_*.png, evidence/stuck_*.png, test-results/**',
-                             excludes: 'evidence/output_*', allowEmptyArchive: true
+            // Always: each run's own folder evidence/runs/<time>_<tests>/ (CSVs,
+            // charts, JSON reports, failure/step screenshots, stuck-browser and
+            // session-drop captures - see config/config.py EVIDENCE_DIR), and the
+            // failure screenshots of tests using the page fixture (test-results/).
+            archiveArtifacts artifacts: 'evidence/runs/**, evidence/**/*.csv, evidence/**/*.json, test-results/**',
+                             excludes: 'evidence/**/output_*, evidence/allure-results/**', allowEmptyArchive: true
             script {
                 if (params.CAPTURE_TEST_DATA?.toString() == 'true') {
-                    archiveArtifacts artifacts: 'evidence/output_*, testdata/session_ids_U*.csv', allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'evidence/**/output_*, testdata/session_ids_U*.csv', allowEmptyArchive: true
                 }
             }
             script {

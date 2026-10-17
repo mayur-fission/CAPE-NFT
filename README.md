@@ -35,7 +35,7 @@ RSTUDIO_SESSION_COUNT=3
 ```
 
 `.env` holds only the settings in use, grouped (server and users, server
-paths, session counts, timings, metrics). Other settings are optional - the
+paths, session counts, timings). Other settings are optional - the
 code has their defaults - and can be added when needed. Ask a teammate for a
 copy rather than starting from scratch.
 
@@ -112,42 +112,39 @@ Everything a run produces goes to `evidence/` (git-ignored):
 The API tests also write the ids of the sessions they create to
 `testdata/session_ids_U<user>.csv` (git-ignored), which later tests reuse.
 
-Metrics are optional. Tests pass without them.
-
-- **OpenTelemetry:** set `OTEL_EXPORTER_OTLP_ENDPOINT` to send to a
-  collector. Otherwise metrics print to the console.
-- **CloudWatch:** set `RSTUDIO_SERVER_INSTANCE_ID` / `RSTUDIO_DB_INSTANCE_ID`
-  to capture server and DB snapshots.
-- **Local Prometheus + Grafana:** see `common/observability.py`. It is run by
-  hand.
-
 ## Layout
 
 ```
+conftest.py shared pytest fixtures and hooks for the whole suite (project root)
 tests/      test files only: settings, flow and assertions
-common/     everything the tests call
-config/     report writers (CSV / JSON / Allure)
+common/     everything the tests call (page helpers, flows, reports)
+config/     settings: config.py loads .env, env(), paths, this run's evidence folder
 testdata/   session-name CSVs for the API tests
 evidence/   test results (generated)
 ```
 
-Main modules in `common/`, from low level to high:
+Modules in `common/`, from low level to high:
 
-| Module | Purpose |
-|---|---|
-| `config.py` | Loads `.env`; `env()` and shared defaults |
-| `locators.py` | Every UI selector and label - update here when the UI changes |
-| `rstudio_session_helper.py` | Session list, naming, launch / open / quit |
-| `rstudio_console_commands.py` | Run R commands in the console and read results |
-| `rstudio_workbench.py`, `rstudio_text_operations.py` | Login, setwd, projects, text files |
-| `session_actions.py` | One-step actions with `.env` defaults (login as user N, retries) |
-| `script_timings.py` | Run records, waiting on many consoles at once, timings CSV |
-| `session_retry.py` | Shared retry / backoff and login staggering |
-| `session_scenarios.py`, `session_batch.py`, `session_concurrent.py` | One session, several in turn, several in parallel browsers |
-| `rstudio_workbenchjob.py` | Workbench jobs and multi-tab script runs |
-| `launch_already_created_sessions.py`, `api_helper.py`, `api_ui_combo.py` | Workbench API and API-created sessions |
-| `perf_scenarios.py`, `script_run_scenarios.py`, `helper_function.py` | Complete test flows (cleanup included) and result helpers |
-| `otel_metrics.py`, `cloudwatch_metrics.py`, `observability.py` | Optional metrics |
+| Layer | Module | Purpose |
+|---|---|---|
+| Base | `config/config.py` | `.env` settings, option parsing, this run's evidence folder (outside `common/`) |
+| | `locators.py` | Every UI selector and label - update here when the UI changes |
+| | `step_log.py`, `evidence.py` | Step log lines; screenshots and output copies |
+| | `session_naming_logic.py` | Every session name prefix and the name builders |
+| | `session_retry.py` | Retry / backoff and login spacing |
+| UI building blocks | `rstudio_session_helper.py` | Sign in, session list, launch / open / quit sessions |
+| | `rstudio_console_commands.py` | R console: run commands, read results, check files |
+| | `rstudio_files.py`, `rstudio_text_operations.py` | Working dir, files, folders, projects; text files |
+| | `rstudio_workbenchjob.py`, `rstudio_backgroundjob.py` | Workbench jobs; background jobs |
+| | `session_actions.py` | One-step actions with `.env` defaults (login as user N, retries) |
+| Flows | `session_scenarios.py`, `session_batch.py`, `session_concurrent.py` | One session; several in turn; several users in parallel |
+| | `script_run_scenarios.py`, `script_outputs.py`, `script_timings.py` | R script in several sessions; output checks; run records |
+| | `parallel_browsers.py` | Several browsers in threads, the wait for all, stuck-browser capture |
+| | `concurrent_sessions.py`, `close_tab_batch.py` | Concurrent / batch tests; close-tab batch test |
+| | `session_monitor.py`, `session_cleanup.py` | Session drops and idle soak; end-of-test cleanup |
+| | `perf_scenarios.py` | Launch performance runs |
+| | `launch_already_created_sessions.py`, `api_helper.py`, `api_ui_combo.py` | Workbench API and API/CSV-created sessions |
+| Reports | `result_printing.py`, `session_time_report.py`, `perf_report.py` | Result lines and summaries; session time charts; launch-performance JSON / CSV / Allure |
 
 When adding a test, keep it to settings, a flow and assertions. Put reusable
 steps in `common/`, and give the test a docstring with a `Flow:` line.

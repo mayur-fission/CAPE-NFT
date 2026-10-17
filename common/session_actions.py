@@ -1,12 +1,11 @@
-"""Single-step actions on a session, with this project's .env defaults
-(credentials, RSTUDIO_WORKING_DIR). They act on whichever session IDE `page`
-is showing. Also re-exports the console/file helpers tests and scenarios use,
-so they have one module to import from.
+"""Single steps with this project's .env defaults (credentials,
+RSTUDIO_WORKING_DIR), acting on whichever session `page` shows. Also passes
+through the console/file helpers tests use, so they import from one place.
 
-Multi-step flows live in session_scenarios.py, session_batch.py and
-session_concurrent.py.
+Flow: login (+ note the sessions already listed / reserve names) -> launch
+      session (with retries) -> setwd
 """
-from common.config import env
+from config.config import env
 from common.evidence import save_screenshot
 from common.rstudio_console_commands import (  # noqa: F401 - re-exported
     get_console_output,
@@ -22,18 +21,15 @@ from common.rstudio_session_helper import (
     launch_new_session,
 )
 from common.rstudio_session_helper import open_existing_session  # noqa: F401 - re-exported
-from common.rstudio_workbench import (  # noqa: F401 - re-exported
-    close_all_editor_files,
-    create_folder,
-    delete_file,
-    delete_folder,
-    recreate_session_folder,
-)
-from common.rstudio_workbench import login as _login
+from common.rstudio_files import close_all_editor_files, recreate_session_folder
+from common.rstudio_session_helper import login as _login
 from common.session_retry import wait_for_login_slot
-from common.rstudio_workbench import set_working_directory as _set_working_directory
+from common.rstudio_files import set_working_directory as _set_working_directory
 from common.step_log import log_step
 from common.session_retry import retry
+from common.rstudio_session_helper import load_all_session_rows
+from common.rstudio_session_helper import row_ids
+from common.session_naming_logic import next_session_names
 
 WORKING_DIR = env("RSTUDIO_WORKING_DIR")
 
@@ -97,3 +93,25 @@ def set_session_working_directory(page, path=None):
         return False
     _set_working_directory(page, path)
     return True
+
+
+# --- Login steps that also note the sessions already listed --------------------
+
+
+def login_and_snapshot(page, user=1):
+    """Log `page` in as `user` and record the sessions already listed, so
+    cleanup_and_verify_sessions() can quit only the ones the test creates.
+    Returns (home_url, before_ids).
+    """
+    home_url = login_to_posit_workbench(page, user=user)
+    load_all_session_rows(page)
+    return home_url, row_ids(page)
+
+
+def login_and_plan_session_names(page, prefix, count, user=1):
+    """login_and_snapshot(), plus the next `count` free <prefix><N> names,
+    reserved from one scan of the session list. Returns (home_url,
+    before_ids, session_names).
+    """
+    home_url, before_ids = login_and_snapshot(page, user=user)
+    return home_url, before_ids, next_session_names(page, prefix, count, home_url=home_url)

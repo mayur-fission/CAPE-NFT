@@ -1,22 +1,18 @@
-"""Test evidence: screenshots of a tab and copies of files a session wrote,
-saved under evidence/ and attached to the running test's Allure report.
+"""Test evidence for this run's folder (config.config EVIDENCE_DIR):
+screenshots of a tab and copies of files a session wrote, attached to
+Allure. Never raises - collecting evidence must not fail a test.
 
-Every helper prints its errors instead of raising, so collecting evidence
-never fails a test.
-
-By default only failures are screenshotted; set EVIDENCE_SCREENSHOTS=1 for
-a screenshot of every step (Jenkins: SCREENSHOT_ALL_STEPS). Copies of the
-files a session wrote are only kept with EVIDENCE_TEST_DATA=1 (Jenkins:
-CAPTURE_TEST_DATA). Reports and metrics do not depend on either.
+Failures are always screenshotted; EVIDENCE_SCREENSHOTS=1 adds every step
+and EVIDENCE_TEST_DATA=1 keeps copies of session output files.
 """
 import os
 import posixpath
 import re
 import time
 
-from config.perf_report import attach_allure_file
+from common.perf_report import attach_allure_file
 
-from common.config import EVIDENCE_DIR, env
+from config.config import EVIDENCE_DIR, env
 from common.rstudio_console_commands import read_text_file
 
 _OFF = ("", "0", "false", "False", "no")

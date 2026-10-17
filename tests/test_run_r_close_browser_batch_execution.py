@@ -1,6 +1,6 @@
 """Like test_run_r_close_browser, but in batches (as
 test_concurrent_sessions_batch_execution does): CLOSE_TAB_BATCH_SESSIONS
-sessions launched from the UI, named CLOSE_TAB_BATCH_1 .. CLOSE_TAB_BATCH_<N>,
+sessions launched from the UI, named BATCH_RUN_R_CLOSE_SESSION_1 .. BATCH_RUN_R_CLOSE_SESSION_<N>,
 spread over CLOSE_TAB_BATCH_BROWSERS browsers (blank = one browser per 5
 sessions), all logged in as one user. Each browser, as soon as its own
 sessions are launched, sources R_SCRIPT_CLOSE_TAB_JOB in all of them, closes
@@ -19,8 +19,9 @@ import time
 import pytest
 
 from common.close_tab_batch import run_close_tab_batch
-from common.concurrent_sessions import browsers_for, concurrent_session_names
-from common.config import env, env_path
+from common.parallel_browsers import browsers_for
+from config.config import env, env_path
+from common.session_naming_logic import BATCH_RUN_R_CLOSE_SESSION_PREFIX, concurrent_session_names
 
 pytestmark = pytest.mark.rstudio_local
 
@@ -30,7 +31,7 @@ SESSION_COUNT = int(env("CLOSE_TAB_BATCH_SESSIONS") or env("CLOSE_TAB_SESSION_CO
                     or env("RSTUDIO_SESSION_COUNT", required=True))
 BROWSER_COUNT = browsers_for(SESSION_COUNT, int(env("CLOSE_TAB_BATCH_BROWSERS") or 0))
 # Own names, so this test cannot quit test_run_r_close_browser's sessions
-SESSION_NAMES = concurrent_session_names(SESSION_COUNT, prefix="CLOSE_TAB_BATCH_")
+SESSION_NAMES = concurrent_session_names(SESSION_COUNT, prefix=BATCH_RUN_R_CLOSE_SESSION_PREFIX)
 # Seconds every browser's sessions run with their tabs closed (CLOSE_BROWSER_WAIT_S,
 # the Jenkins field, wins when set), and how often the session list is checked
 TEST_DURATION_SECONDS = float(

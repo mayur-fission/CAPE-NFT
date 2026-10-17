@@ -3,20 +3,16 @@ the real browser flow. Every test force-quits the sessions it created.
 """
 import pytest
 
-from common.config import env
-from common.helper_function import (
-    close_tabs,
-    create_sessions_with_working_dir,
-    failed,
-    format_timings,
-    login_and_plan_session_names,
-)
+from config.config import env
+from common.session_batch import close_tabs, create_sessions_with_working_dir
+from common.session_actions import login_and_plan_session_names
+from common.result_printing import failed, format_timings
 from common.perf_scenarios import run_launch_perf_single
-from common.rstudio_session_helper import AUTO_PERF_NAME_PREFIX
 from common.session_actions import WORKING_DIR
 from common.session_cleanup import cleanup_and_verify_sessions
-from common.session_monitoring import keep_sessions_idle_and_poll_file_list
+from common.session_monitor import keep_sessions_idle_and_poll_file_list
 from common.session_scenarios import open_sessions_in_tabs
+from common.session_naming_logic import AUTO_PERF_NAME_PREFIX
 
 pytestmark = pytest.mark.rstudio_local
 

@@ -1,37 +1,32 @@
-# Test runner and browser automation. After installing, run:
-#   playwright install chromium
+# Install: pip install -r requirements.txt, then: playwright install chromium
+
+# --- Test runner ---------------------------------------------------------------
 pytest==8.3.3
-pytest-playwright==0.8.0
 # Run test files in parallel processes: pytest -n 2 --dist loadfile
 pytest-xdist==3.8.0
+
+# --- Browser automation --------------------------------------------------------
 playwright==1.60.0
+# page / context / browser fixtures, --headed, --screenshot, --output
+pytest-playwright==0.8.0
+# Screenshots of a stuck browser over DevTools (common/parallel_browsers.py;
+# optional - without it only the tab list is saved)
+websocket-client==1.9.0
+
+# --- Settings ------------------------------------------------------------------
+# Loads .env (config/config.py)
 python-dotenv==1.2.2
 
-# Workbench API calls and testdata/ files (common/api_helper.py)
+# --- Workbench API and testdata/ files (common/api_helper.py) ------------------
 requests==2.32.3
 openpyxl==3.1.5
 
-# Reports: Allure steps/attachments (config/perf_report.py)
+# --- Reports -------------------------------------------------------------------
+# Allure steps and attachments (common/perf_report.py)
 allure-pytest==2.13.5
-
-# Session time charts (optional - common/session_time_report.py skips them
-# without these); tzdata gives Windows the IANA timezones
+# Session time charts (common/session_time_report.py; optional - skipped
+# without them); tzdata gives Windows the IANA timezones
 pandas==2.3.3
 numpy==2.3.4
 matplotlib==3.10.7
 tzdata==2025.2
-
-# Metrics (optional - tests pass without a backend):
-# OTel metrics (common/otel_metrics.py) and the local Prometheus/Grafana
-# stack it feeds (common/observability.py, which also needs PyYAML)
-opentelemetry-api==1.44.0
-opentelemetry-sdk==1.44.0
-opentelemetry-exporter-otlp-proto-http==1.44.0
-opentelemetry-exporter-prometheus==0.65b0
-PyYAML==6.0.3
-# CloudWatch server/DB snapshots (common/cloudwatch_metrics.py)
-boto3==1.35.36
-
-# Screenshots of stuck browsers over DevTools (common/concurrent_sessions.py;
-# optional - without it only the tab list is saved)
-websocket-client==1.9.0

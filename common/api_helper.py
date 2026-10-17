@@ -16,8 +16,8 @@ from urllib.parse import urlsplit
 import requests
 from openpyxl import Workbook
 
-from common.config import REPO_ROOT, env
-from config.perf_report import attach_allure_file
+from config.config import REPO_ROOT, env
+from common.perf_report import attach_allure_file
 
 _TESTDATA_DIR = os.path.join(REPO_ROOT, "testdata")
 _LAUNCH_FIELDS = ("session_id", "project_id", "url")

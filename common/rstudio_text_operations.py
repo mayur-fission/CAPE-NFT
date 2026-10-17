@@ -1,5 +1,6 @@
-"""Text-file editor workflow: open a new text tab, type into it and save it
-via the Save File dialog.
+"""Text files in the editor.
+
+Flow: File > New File > Text File -> type -> Ctrl+S -> Save File dialog
 """
 import re
 import time

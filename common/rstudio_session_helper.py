@@ -1,28 +1,23 @@
-"""Session lifecycle in the Workbench UI: the session list, naming, launching,
-opening and quitting sessions. Workbench has no public REST API for the
-browser flow, so this drives the UI.
+"""Workbench home page: sign in, the session list (rows, statuses, names)
+and launching, opening and quitting sessions.
+
+Flow: login -> session list -> New Session / open a row -> IDE ready
+      ... -> session list -> tick rows -> Quit
 """
-import re
 import time
 from collections import namedtuple
 from contextlib import contextmanager
 
 from common import locators
-from common.config import env
+from config.config import env
 from common.evidence import save_screenshot
+from common.session_naming_logic import AUTO_PERF_NAME_PREFIX, next_session_name
 
 SESSION_TYPE = env("RSTUDIO_SESSION_TYPE", "RStudio Pro")
 
 # elapsed_s runs from the click to the IDE's Console appearing;
 # bytes_received counts response bodies in that window.
 SessionLaunch = namedtuple("SessionLaunch", ["elapsed_s", "bytes_received", "session_name"])
-
-AUTO_PERF_NAME_PREFIX = "AUTO_PERF_SESSION_"
-RUN_R_SESSION_NAME_PREFIX = "Run_R_session_"
-# Every prefix the UI tests name their sessions with (the user1/user2 tests
-# use AUTO_SESSION_U<n>_), so teardown only quits sessions they could have
-# created, not other people's on a shared account.
-AUTOMATION_NAME_PREFIXES = (AUTO_PERF_NAME_PREFIX, RUN_R_SESSION_NAME_PREFIX, "AUTO_SESSION_U")
 
 # Session list statuses that count as a running session: idle (Active) or
 # running code (Executing).
@@ -39,37 +34,6 @@ def goto_session_list(page, home_url, settle_ms=SESSION_LIST_SETTLE_MS, timeout_
     page.get_by_text(locators.NEW_SESSION_TEXT, exact=True).first.wait_for(state="visible", timeout=timeout_ms)
     if settle_ms:
         page.wait_for_timeout(settle_ms)
-
-
-def _highest_number_with_prefix(page, prefix):
-    """Highest N among <prefix><N> names on the session list (0 if none)."""
-    pattern = re.compile(re.escape(prefix) + r"(\d+)")
-    highest = 0
-    rows = page.locator(locators.SESSION_ROW_SELECTOR)
-    for i in range(rows.count()):
-        for match in pattern.finditer(rows.nth(i).inner_text()):
-            highest = max(highest, int(match.group(1)))
-    return highest
-
-
-def next_session_names(page, prefix, count, home_url=None):
-    """Reserve `count` consecutive <prefix><N> names from one scan of the
-    session list, so concurrent browsers don't race for the same name. Pass
-    home_url to navigate there first."""
-    if home_url:
-        goto_session_list(page, home_url)
-    start = _highest_number_with_prefix(page, prefix) + 1
-    return ["%s%d" % (prefix, start + i) for i in range(count)]
-
-
-def next_session_name(page, prefix, home_url=None):
-    """The next free <prefix><N> name (see next_session_names())."""
-    return next_session_names(page, prefix, 1, home_url=home_url)[0]
-
-
-def next_auto_perf_session_names(page, count, home_url=None):
-    """next_session_names() with the AUTO_PERF_SESSION_ prefix."""
-    return next_session_names(page, AUTO_PERF_NAME_PREFIX, count, home_url=home_url)
 
 
 @contextmanager
@@ -376,3 +340,23 @@ def bulk_quit_sessions(page, row_ids):
         print("[rstudio-local] cleanup: checked %d session(s) and clicked Quit once: %s"
               % (len(checked), ", ".join(sorted(checked))))
     return checked
+
+
+# --- Sign in -------------------------------------------------------------------
+
+
+def login(page, base_url, username=None, password=None):
+    """Sign `page` into base_url and return the session list URL.
+    Credentials default to RSTUDIO_USER1/RSTUDIO_PASSWORD.
+    """
+    username = username or env("RSTUDIO_USER1", required=True)
+    password = password or env("RSTUDIO_PASSWORD", required=True)
+
+    sign_in_url = base_url if base_url.endswith("/auth-sign-in") else base_url + "/auth-sign-in"
+    page.goto(sign_in_url)
+    page.locator(locators.USERNAME_INPUT).fill(username)
+    page.locator(locators.PASSWORD_INPUT).fill(password)
+    page.get_by_role("button", name=locators.SIGN_IN_BUTTON).click()
+    page.get_by_text(locators.NEW_SESSION_TEXT, exact=True).first.wait_for(state="visible", timeout=50000)
+    page.wait_for_timeout(2000)  # the session table re-renders shortly after
+    return page.url

@@ -1,16 +1,13 @@
-"""R console automation: run commands (blocking or not), read values back
-and inspect the session's filesystem.
-
-Results are read back from the console output text, tagged with a unique
-marker that R assembles via paste0() - so the marker only appears once R
-prints it, never in the echoed command.
+"""R console: type commands (waiting or not), read values back, and check
+files/folders through R. Results are read from the console text, tagged
+with a marker R assembles at run time, so the echoed command never matches.
 """
 import itertools
 import re
 import time
 
 from common import locators
-from common.config import env
+from config.config import env
 
 _POLL_INTERVAL_MS = 200
 # How long a console read waits for the console to be on the page. With many
@@ -210,19 +207,12 @@ def _fail_marker(marker):
 
 
 def submit_console_command(page, command, confirm=True):
-    """Type `command` into the console and press Enter without waiting for
-    it to finish. With confirm (see _type_command()), retypes it if the
-    keystrokes were lost.
+    """Type `command` into the console and press Enter without waiting.
 
-    The command runs inside tryCatch(), so an R error prints a failure
-    marker with the error message, which is_console_command_done() raises
-    as RCommandError right away instead of waiting for the timeout.
-    Assignments and source() still land in the global environment, and a
-    visible result is still printed (e.g. list.files()), as at top level;
-    for "a; b" only b's result is printed.
-
-    Returns (marker, started) for is_console_command_done() or
-    wait_for_console_command(); started is when the command was taken.
+    It runs inside tryCatch(), so an R error prints a failure marker that
+    is_console_command_done() raises as RCommandError at once. Assignments
+    and source() still land in the global environment, and a visible result
+    is printed as at top level. Returns (marker, started).
     """
     marker = _unique_marker("DONE")
     full_command = (

@@ -9,7 +9,7 @@ import os
 import pytest
 
 from common.api_helper import launch_sessions_from_csv, session_names_csv_path
-from common.config import env, env_path
+from config.config import env, env_path
 from common.script_run_scenarios import run_script_in_existing_sessions_scenario
 
 pytestmark = pytest.mark.rstudio_local

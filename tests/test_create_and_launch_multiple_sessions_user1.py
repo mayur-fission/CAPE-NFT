@@ -7,19 +7,20 @@ import time
 
 import pytest
 
-from common.config import env, env_path
-from common.helper_function import (
+from config.config import env, env_path
+from common.session_batch import (
     launch_sessions_scenario,
-    login_and_plan_session_names,
     run_command_concurrently_in_tabs_scenario,
     run_command_in_tabs_scenario,
 )
+from common.session_actions import login_and_plan_session_names
+from common.session_naming_logic import user_session_name_prefix
 
 pytestmark = pytest.mark.rstudio_local
 
 USER = 1
 SESSION_COUNT = int(env("RSTUDIO_SESSION_COUNT", "10"))
-SESSION_NAME_PREFIX = "AUTO_SESSION_U1_"
+SESSION_NAME_PREFIX = user_session_name_prefix(1)
 LAUNCH_ATTEMPTS = 3
 LABEL = "user1"
 SOURCE_COMMAND = env_path("R_SOURCE_COMMAND_NEW_SESSIONS", "RSTUDIO_RUN_SCRIPT_SOURCE_COMMAND")

@@ -9,7 +9,7 @@ sessions) first.
 """
 import pytest
 
-from common.config import env, env_path
+from config.config import env, env_path
 from common.script_run_scenarios import (
     run_script_in_new_sessions_scenario,
     source_script_close_tabs_then_quit_scenario,

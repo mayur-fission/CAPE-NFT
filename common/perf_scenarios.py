@@ -1,10 +1,11 @@
-"""End-to-end launch-performance scenarios: log in, launch session(s), write
-JSON / JMeter-style CSV / Allure reports and OTel metrics, then quit every
-session the run created, pass or fail.
+"""Session launch performance runs and their JSON / CSV / Allure reports.
+
+Flow: login -> launch session(s) -> check the new rows -> reports -> p95
+      limit -> quit sessions
 """
 import os
 
-from config.perf_report import (
+from common.perf_report import (
     attach_allure_reports,
     build_csv_rows,
     build_stats,
@@ -12,8 +13,7 @@ from config.perf_report import (
     write_json_report,
 )
 
-from common.config import EVIDENCE_DIR
-from common.otel_metrics import capture_otel_metrics
+from config.config import EVIDENCE_DIR
 from common.rstudio_session_helper import goto_session_list, row_ids
 from common.session_actions import login_to_posit_workbench
 from common.session_batch import create_multiple_sessions
@@ -61,7 +61,7 @@ def _assert_created_rows_match(created_ids, ok_results, results):
 
 def _check_and_report(results, created_ids, run_elapsed, scenario, json_path, csv_path, p95_max_seconds):
     """Assert every launch succeeded and matches the new rows, write the JSON,
-    CSV and Allure reports and the OTel metrics, then apply the p95 limit.
+    CSV and Allure reports, then apply the p95 limit.
     Returns (stats, csv_path)."""
     ok_results = [r for r in results if r["ok"]]
     failures = [(r["index"], r["error"]) for r in results if not r["ok"]]
@@ -76,7 +76,6 @@ def _check_and_report(results, created_ids, run_elapsed, scenario, json_path, cs
     write_csv_report(csv_path, build_csv_rows(results, run_elapsed))
     print("[rstudio-local] wrote JMeter-style aggregate report to %s" % csv_path)
     attach_allure_reports(stats, csv_path)
-    capture_otel_metrics(results, run_elapsed, scenario=scenario)
 
     if p95_max_seconds:
         assert stats["p95_s"] <= p95_max_seconds, (

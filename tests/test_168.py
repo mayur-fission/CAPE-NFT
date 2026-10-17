@@ -6,8 +6,9 @@ Every session created is force-quit afterwards.
 """
 import pytest
 
-from common.config import env, env_path
+from config.config import env, env_path
 from common.script_run_scenarios import run_script_in_new_sessions_scenario
+from common.session_naming_logic import TEST_168_NAME_PREFIX
 
 pytestmark = pytest.mark.rstudio_local
 
@@ -18,7 +19,7 @@ OUTPUT_DIR = env_path("OUTPUT_DIR_HIGH_THROUGHPUT", "HIGH_THROUGHPUT_JOB_OUTPUT_
 OUTPUT_FILE_NAME = "generated_data_10kb.csv"
 # Own name prefix, so this test can run at the same time as the other
 # high-throughput tests (see run_script_in_new_sessions_scenario()).
-SESSION_NAME_PREFIX = "168_AUTO_SESSION_"
+SESSION_NAME_PREFIX = TEST_168_NAME_PREFIX
 
 
 def test_high_throughput_script_concurrent_session_timed_168(context):

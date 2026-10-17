@@ -1,31 +1,28 @@
-"""Multi-step flows on one session at a time: launch + project (+ text
-files), launch + run a script, and opening several sessions in tabs.
+"""Multi-step flows on one session at a time.
 
-For concurrent runs see session_concurrent.py; for sequential batches on one
-page see session_batch.py.
+Flow: launch -> setwd -> create project (-> text file(s))
+      launch -> setwd -> run R script (n times)
 """
 import time
 from collections import namedtuple
 
-from config.perf_report import allure_step
+from common.perf_report import allure_step
 
-from common.config import default_session_count, env, env_path
-from common.rstudio_session_helper import (
-    RUN_R_SESSION_NAME_PREFIX,
-    goto_session_list,
-    next_auto_perf_session_names,
-    next_session_name,
-    next_session_names,
-    open_existing_session,
-)
+from config.config import default_session_count, env, env_path
+from common.rstudio_session_helper import goto_session_list, open_existing_session
 from common.rstudio_text_operations import create_text_file
-from common.rstudio_workbench import (
+from common.rstudio_files import (
     create_project_from_existing_directory,
     set_working_directory,
     verify_working_directory,
 )
 from common.script_timings import run_timed_console_command_repeatedly
 from common.session_actions import WORKING_DIR, launch_session, set_session_working_directory
+from common.session_naming_logic import (
+    RUN_R_SESSION_NAME_PREFIX,
+    next_auto_perf_session_names,
+    next_session_name,
+)
 
 SessionAndProject = namedtuple("SessionAndProject", ["launch", "project"])
 SessionProjectAndTextFile = namedtuple("SessionProjectAndTextFile", ["launch", "project", "text_file"])
@@ -83,19 +80,12 @@ def launch_with_project_and_text_files(
 def launch_in_tabs_with_project_and_text_file(
     context, home_url, count=None, working_dir=None, content=None, folder=None, file_name=None
 ):
-    """launch_with_project_and_text_file() `count` times (default
-    RSTUDIO_SESSION_COUNT), each in its own new tab of the signed-in
-    `context`. A failed tab is recorded and does not stop the rest. Tabs are
-    left open; closing them and quitting sessions is the caller's job.
+    """launch_with_project_and_text_file() `count` times, each in a new tab
+    of `context` (tabs left open; a failed tab does not stop the rest).
 
-    All AUTO_PERF_SESSION_<N> names are reserved up front: once a session
-    has a project its row shows the project name instead, so scanning per
-    tab would reuse names.
-
-    Returns (results, tabs, run_elapsed_s): one result dict per session
-    ("launch_elapsed_s", "project_elapsed_s", "text_file_elapsed_s",
-    "bytes_received" on success, "error" on failure), the tabs in the same
-    order, and total wall-clock seconds.
+    Names are reserved up front: once a session has a project its row shows
+    the project name, so scanning per tab would reuse names.
+    Returns (results, tabs, run_elapsed_s).
     """
     count = count or default_session_count()
     names_page = context.pages[0] if context.pages else context.new_page()
@@ -146,11 +136,6 @@ def open_sessions_in_tabs(context, home_url, session_names):
             result.update(ok=False, error=str(exc))
         results.append(result)
     return tabs, results
-
-
-def next_run_r_session_names(page, count, home_url=None):
-    """Reserve `count` consecutive Run_R_session_<N> names at once."""
-    return next_session_names(page, RUN_R_SESSION_NAME_PREFIX, count, home_url=home_url)
 
 
 def default_run_script_command():

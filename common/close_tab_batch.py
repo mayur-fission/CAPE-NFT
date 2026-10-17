@@ -1,33 +1,23 @@
-"""Helpers for tests/test_run_r_close_browser_batch_execution.py: the
-close-tab test in batches, like test_concurrent_sessions_batch_execution.
+"""Close-tab test in batches over several browsers.
 
-Sessions are spread over several browsers (a handful of tabs each, see
-common.concurrent_sessions). Each browser, as soon as its own sessions are
-launched, sources the R script in all of them, closes their tabs and
-watches them for TEST_DURATION seconds (common.session_monitor: a session
-that leaves the list or stops being Active/Executing is a drop). It does
-not wait for the other browsers to start. Stopping the scripts and quitting
-the sessions happen only once every browser has finished watching, so no
-cleanup lightens the load while another browser is still being measured.
+Flow per browser: login -> quit leftovers -> launch each in a tab -> source
+      script in each -> close tabs -> watch for drops -> wait for all
+      browsers -> reopen each and stop its script -> quit sessions
 """
 import os
 
-from config.perf_report import attach_allure_file, write_json_report
+from common.perf_report import attach_allure_file, write_json_report
 
-from common.api_ui_combo import (
-    browser_name_prefixes,
-    launch_sessions_in_tabs,
-    login_and_quit_sessions_named,
-    quit_ui_sessions_named,
-    run_in_parallel_browsers,
-)
-from common.concurrent_sessions import _BrowserProgress, _free_port, split_across_browsers
-from common.config import EVIDENCE_DIR, env
+from common.api_ui_combo import launch_sessions_in_tabs, login_and_quit_sessions_named, quit_ui_sessions_named
+from common.parallel_browsers import run_in_parallel_browsers
+from common.parallel_browsers import BrowserProgress, free_port, split_across_browsers
+from config.config import EVIDENCE_DIR, env
 from common.launch_already_created_sessions import SETWD_ATTEMPTS, SETWD_RETRY_WAIT_S, close_launched_sessions
 from common.rstudio_console_commands import r_source_command, submit_console_command
 from common.session_actions import set_session_working_directory
 from common.session_monitor import monitor_sessions, stop_console_scripts
 from common.step_log import log_step
+from common.session_naming_logic import browser_name_prefixes
 
 
 def run_close_tab_batch(browser_name, launch_args, context_args, user, session_names, browser_count, label,
@@ -49,8 +39,8 @@ def run_close_tab_batch(browser_name, launch_args, context_args, user, session_n
     for prefix, names in names_by_browser.items():
         print("\n[rstudio-local] browser %s: %d session(s) - %s" % (prefix.rstrip("_"), len(names), ", ".join(names)))
 
-    debug_ports = {p: _free_port() for p in prefixes} if browser_name == "chromium" else {}
-    progress = _BrowserProgress(prefixes, label=label, debug_ports=debug_ports)
+    debug_ports = {p: free_port() for p in prefixes} if browser_name == "chromium" else {}
+    progress = BrowserProgress(prefixes, label=label, debug_ports=debug_ports)
     # Longest a finished browser waits for the others: the last one starting
     # late, retrying every launch and then watching for the full duration.
     cleanup_wait_s = int(env("CONCURRENT_CLEANUP_WAIT_S") or (

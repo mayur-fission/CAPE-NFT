@@ -1,17 +1,16 @@
-"""Helpers for tests that create sessions through the Workbench API and then
-drive them in the browser: create sessions from several CSVs, give groups of
-open sessions different workloads (Workbench jobs, repeated console
-commands) and clean everything up afterwards.
+"""Sessions created from testdata CSVs (through the API or the UI) and
+driven in the browser with group workloads (Workbench / background jobs,
+repeated console commands), then cleaned up.
 
-Run records use the common.script_timings format ("session_name",
-"started", "ended", "status").
+Flow: create sessions from CSVs -> open each in a tab -> groups start
+      their workloads -> run until the deadline -> check jobs -> stop jobs,
+      close tabs -> quit sessions
 """
 import os
 import posixpath
 import threading
 import time
 
-from playwright.sync_api import sync_playwright
 
 from common import locators
 from common.api_helper import launch_sessions_from_csv, read_session_names, stop_session, write_session_ids
@@ -43,7 +42,7 @@ from common.rstudio_backgroundjob import (
     start_background_job,
 )
 from common.rstudio_workbenchjob import get_job_status, start_workbench_job, stop_workbench_job
-from common.script_timings import failed_runs, new_run_record
+from common.script_timings import new_run_record
 from common.session_actions import (
     close_all_editor_files,
     login_to_posit_workbench,
@@ -51,7 +50,10 @@ from common.session_actions import (
     set_session_working_directory,
 )
 from common.session_cleanup import cleanup_and_verify_sessions, quit_sessions_named
+from common.session_naming_logic import prefixed_session_names
 from common.step_log import current_browser, log_step
+from common.parallel_browsers import run_in_parallel_browsers
+from common.result_printing import report_failed_runs
 
 
 def ms_left(deadline):
@@ -127,107 +129,20 @@ def launch_or_reopen_session(page, home_url, session_name, attempts=3, launch_ti
 
 def create_sessions_in_ui_from_csvs(context, user, csv_paths, attempts=3, launch_timeout_ms=180000,
                                     retry_wait_s=15):
-    """Log in as `user` and launch one session per name in each CSV through
-    the New Session dialog, each in its own tab, leaving the tab on the
-    session's IDE with its console ready. Sessions already listed under one
-    of the CSV names (e.g. left over from an earlier run) are quit first, so
-    every session is created afresh. Failed launches are retried with
-    launch_or_reopen_session(), which reopens a session the failed attempt
-    created rather than launching a duplicate.
+    """Log in as `user` and launch one session per CSV name, each in its own
+    tab left on the IDE (leftovers with those names are quit first).
 
-    The login (session list) tab is closed before the first launch: every
-    IDE tab holds a long-poll connection to the server, and with 5 IDE tabs
-    plus the session list a browser reaches Chrome's limit of 6 HTTP/1.1
-    connections per host, so further requests queue and tabs stall. The
-    context stays signed in; quit_ui_created_sessions() opens a new tab.
+    Flow: login -> quit leftovers -> close the login tab -> launch each name
+          (retried, reopening a half-created session instead of duplicating)
 
-    Returns (home_url, before_ids, names_by_csv, launched, failed):
-    before_ids are the session rows listed before any launch (for
-    quit_ui_created_sessions()),
-    names_by_csv maps each CSV path to the names launched from it, launched
-    holds a LaunchedSession per launched name and failed "<name>: <error>"
-    for the rest. A failed launch does not stop the others.
+    The login tab is closed because 5 IDE tabs plus the session list reach
+    Chrome's limit of 6 connections per host and stall the tabs.
+    Returns (home_url, before_ids, names_by_csv, launched, failed).
     """
     return create_sessions_in_ui_across_browsers(
         [context], user, csv_paths, attempts=attempts, launch_timeout_ms=launch_timeout_ms,
         retry_wait_s=retry_wait_s,
     )
-
-
-def browser_name_prefixes(browser_count):
-    """The session name prefix of each browser: "B1_", "B2_", ..."""
-    return ["B%d_" % (i + 1) for i in range(browser_count)]
-
-
-def run_in_parallel_browsers(browser_name, launch_args, context_args, prefixes, worker, barriers=(),
-                             stagger_s=0, join_timeout_s=None, debug_ports=None):
-    """Open one browser per entry in `prefixes`, each in its own thread with
-    its own Playwright (the sync API cannot share one between threads), and
-    call worker(context, prefix) there with a new context of that browser.
-    Browsers are started `stagger_s` apart (browser n waits n * stagger_s),
-    so their logins do not collide.
-    Returns [(prefix, result, error)] in `prefixes` order: result is what
-    worker returned, error the exception that escaped it (else None).
-
-    If a thread fails outside worker - or worker raises - each of `barriers`
-    is aborted, so the other threads waiting on them are not stuck.
-
-    With join_timeout_s, stops waiting for the threads after that long: a
-    thread still running (e.g. frozen inside a Playwright call) is reported
-    as a TimeoutError and left behind (daemon thread, ended with the
-    process), so one stuck browser cannot hang the test for ever.
-
-    With debug_ports ({prefix: port}, Chromium only), each browser listens
-    for DevTools on 127.0.0.1:<port>, so another thread can connect to it
-    and screenshot its tabs while the browser's own thread is stuck.
-    """
-    results = [None] * len(prefixes)
-
-    def _run(index, prefix):
-        try:
-            if index and stagger_s:
-                print("\n[rstudio-local] browser %s: starting in %ds" % (prefix, index * stagger_s))
-                time.sleep(index * stagger_s)
-            args = dict(launch_args)
-            if debug_ports and prefix in debug_ports and browser_name == "chromium":
-                args["args"] = list(args.get("args") or []) + ["--remote-debugging-port=%d" % debug_ports[prefix]]
-            with sync_playwright() as playwright:
-                browser = getattr(playwright, browser_name).launch(**args)
-                log_step("Browser %s started (%s)", prefix.rstrip("_"), browser_name)
-                try:
-                    context = browser.new_context(**{**context_args, "ignore_https_errors": True})
-                    results[index] = (prefix, worker(context, prefix), None)
-                finally:
-                    browser.close()
-                    log_step("Browser %s closed", prefix.rstrip("_"))
-        except BaseException as exc:
-            print("\n[rstudio-local] browser %s failed: %s" % (prefix, exc))
-            results[index] = (prefix, None, exc)
-            for barrier in barriers:
-                barrier.abort()
-
-    threads = [
-        threading.Thread(target=_run, args=(i, prefix), name="browser-%s" % prefix.rstrip("_"),
-                         daemon=join_timeout_s is not None)
-        for i, prefix in enumerate(prefixes)
-    ]
-    for thread in threads:
-        thread.start()
-    deadline = time.time() + join_timeout_s if join_timeout_s is not None else None
-    for i, thread in enumerate(threads):
-        thread.join(None if deadline is None else max(0, deadline - time.time()))
-        if thread.is_alive():
-            print("\n[rstudio-local] browser %s still running after %ds - not waiting for it any longer"
-                  % (prefixes[i], join_timeout_s))
-            results[i] = (prefixes[i], None, TimeoutError(
-                "browser did not finish within %ds (stuck - its sessions may need deleting by hand)"
-                % join_timeout_s))
-    return results
-
-
-def prefixed_session_names(csv_paths, prefixes=("",)):
-    """Every name in `csv_paths` with each of `prefixes` in front."""
-    return [prefix + name for prefix in prefixes for csv_path in csv_paths for name in read_session_names(csv_path)]
 
 
 def create_sessions_in_ui_across_browsers(contexts, user, csv_paths, prefixes=("",), attempts=3,
@@ -353,34 +268,16 @@ def quit_ui_sessions_named(context, home_url, before_ids, session_names, what=""
             page.close()
 
 
-def wait_until_epoch(start_at_epoch, who="this machine"):
-    """Sleep until `start_at_epoch` (Unix time, number or string), logging
-    the start time for `who`; no wait if it is blank or past."""
-    if not start_at_epoch:
-        return
-    start_at = float(start_at_epoch)
-    wait_s = start_at - time.time()
-    print("\n[rstudio-local] %s: starting at %s (in %.0fs)"
-          % (who, time.strftime("%H:%M:%S", time.localtime(start_at)), max(0.0, wait_s)))
-    if wait_s > 0:
-        time.sleep(wait_s)
-
-
 def run_group_workloads_across_browsers(browser_name, launch_args, context_args, user, group_csvs, prefixes,
                                         label, stagger_s=0, attempts=3, launch_timeout_ms=180000,
                                         retry_wait_s=15, **workload):
-    """run_group_workloads() in one browser per entry in `prefixes`, run by
-    run_in_parallel_browsers(). Each browser logs in as `user` and launches
-    every name in `group_csvs` ({"test"|"a"|"b"|"c": csv path}) with its
-    prefix in front. `workload` is run_group_workloads()'s arguments after
-    `label`.
+    """run_group_workloads() in one browser per prefix (run_in_parallel_browsers()).
 
-    Browsers wait for each other before the workloads (skipped everywhere
-    if any browser failed to launch) and before cleanup; each closes its
-    tabs and quits the sessions it created even on failure.
+    Flow per browser: login -> launch every `group_csvs` name with its prefix
+          -> wait for all browsers -> workloads -> wait for all -> close tabs
+          -> quit its sessions
 
-    Returns (runs, errors): all run records, and "browser <prefix>: <error>"
-    per failed browser.
+    Returns (runs, errors).
     """
     ready = threading.Barrier(len(prefixes))
     done = threading.Barrier(len(prefixes))
@@ -449,22 +346,14 @@ def _run_group_workloads_in_browser(context, prefix, user, group_csvs, label, re
 def run_group_workloads(groups, runs, label, duration_s, script_path, output_dir, output_file_name,
                         job_script_path, list_files_interval_s=30, background_jobs=False):
     """Run each group's workload at once until `duration_s` from now and
-    assert none failed. `groups` maps "test", "a", "b" and "c" to
-    LaunchedSession lists:
+    assert none failed. `groups`: "test" sources `script_path` (must leave
+    `output_file_name`), "a" repeats list.files(`output_dir`), "b" runs
+    `job_script_path` as a Workbench (or background) job, "c" stays idle.
 
-    - test: source `script_path` (must leave `output_file_name` in
-            `output_dir`/<session name>)
-    - a:    list.files(`output_dir`), repeated list_files_interval_s after
-            each answer
-    - b:    `job_script_path` as a Workbench job, or with background_jobs
-            as an RStudio background job (must not fail)
-    - c:    nothing - left idle
+    Flow: start jobs (b) -> run script (test) while polling list.files (a) ->
+          keep going until duration_s -> check jobs
 
-    Run records are added to `runs` as they come in, so the caller can save
-    them even on failure; `label` tags the summary line.
-
-    Flow: start jobs (b) -> run script (test) while polling list.files (a)
-    -> keep going until duration_s -> check jobs
+    Run records are added to `runs` as they come in.
     """
     started = time.time()
     deadline = started + duration_s
@@ -487,18 +376,6 @@ def run_group_workloads(groups, runs, label, duration_s, script_path, output_dir
 
     failures = report_failed_runs(runs, label, started, idle_sessions=groups["c"])
     assert not failures, "runs that did not finish: %s" % failures
-
-
-def report_failed_runs(runs, label, started, idle_sessions=()):
-    """Print a one-line summary of `runs` (and of the sessions left idle) and
-    return failed_runs(runs)."""
-    failures = failed_runs(runs)
-    print(
-        "\n[rstudio-local] %s: %d of %d run(s) finished successfully, %d session(s) left idle (%s), %.2fs in total"
-        % (label, len(runs) - len(failures), len(runs), len(idle_sessions),
-           ", ".join(s.session_name for s in idle_sessions), time.time() - started)
-    )
-    return failures
 
 
 def clean_up(launched, created, user, job_sessions=(), job_script_path=None):

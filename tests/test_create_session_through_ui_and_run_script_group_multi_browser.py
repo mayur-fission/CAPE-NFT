@@ -19,9 +19,11 @@ the machines' logins don't clash.
 import pytest
 
 from common.api_helper import group_sessions_csv_paths
-from common.api_ui_combo import browser_name_prefixes, run_group_workloads_across_browsers, wait_until_epoch
-from common.config import env, env_path
+from common.api_ui_combo import run_group_workloads_across_browsers
+from common.parallel_browsers import wait_until_epoch
+from config.config import env, env_path
 from common.script_timings import script_timings_csv_path, write_script_timings_csv
+from common.session_naming_logic import browser_name_prefixes
 
 pytestmark = pytest.mark.rstudio_local
 

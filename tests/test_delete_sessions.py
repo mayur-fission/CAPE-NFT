@@ -9,16 +9,16 @@ the same time as the same user is still using.
 """
 import pytest
 
-from common.config import env
+from config.config import env
 from common.evidence import save_screenshot
 from common.rstudio_session_helper import (
-    AUTO_PERF_NAME_PREFIX,
     goto_session_list,
     load_all_session_rows,
     session_row_ids_with_prefix,
 )
 from common.session_actions import login_to_posit_workbench
 from common.session_cleanup import cleanup_and_verify_sessions
+from common.session_naming_logic import AUTO_PERF_NAME_PREFIX
 
 pytestmark = pytest.mark.rstudio_local
 

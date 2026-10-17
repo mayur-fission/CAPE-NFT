@@ -23,7 +23,7 @@ from common.api_ui_combo import (
     run_group_workloads,
     stop_jobs_and_close_tabs,
 )
-from common.config import env, env_path
+from config.config import env, env_path
 from common.script_timings import script_timings_csv_path, write_script_timings_csv
 
 pytestmark = pytest.mark.rstudio_local

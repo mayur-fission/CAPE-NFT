@@ -1,4 +1,5 @@
-"""Start a long-running R script in CLOSE_TAB_SESSION_COUNT new sessions (each
+"""Start a long-running R script in CLOSE_TAB_SESSION_COUNT new sessions, named
+RUN_R_CLOSE_SESSION_<N> (the next free numbers; each
 in its own tab), close every tab straight away and check the sessions survive
 CLOSE_TAB_TEST_DURATION_S seconds on their own (CLOSE_BROWSER_WAIT_S, the
 Jenkins field, wins when set). Meanwhile the session list is checked every
@@ -15,11 +16,12 @@ import time
 
 import pytest
 
-from common.config import env, env_path
+from config.config import env, env_path
 from common.script_run_scenarios import (
     source_script_close_tabs_then_quit_scenario,
     start_jobs_close_tabs_then_stop_jobs_scenario,
 )
+from common.session_naming_logic import RUN_R_CLOSE_SESSION_PREFIX
 
 pytestmark = pytest.mark.rstudio_local
 
@@ -37,6 +39,8 @@ TEST_DURATION_SECONDS = float(
 MONITOR_INTERVAL_S = float(env("CLOSE_TAB_MONITOR_INTERVAL_S", "30"))
 # Interrupt each session's R script before the sessions are quit
 STOP_SCRIPTS_BEFORE_CLEANUP = env("CLOSE_TAB_STOP_SCRIPTS_BEFORE_CLEANUP", "true").lower() != "false"
+# Session names: RUN_R_CLOSE_SESSION_<N> (cleanup quits exactly these)
+NAME_PREFIX = RUN_R_CLOSE_SESSION_PREFIX
 LABEL = "close_tab_%d_sessions_%s" % (SESSION_COUNT, time.strftime("%Y%m%d-%H%M%S"))
 
 
@@ -69,4 +73,5 @@ def test_console_scripts_run_after_tabs_closed_then_quit(context):
     source_script_close_tabs_then_quit_scenario(
         context, SESSION_COUNT, SCRIPT_PATH, TEST_DURATION_SECONDS,
         monitor_interval_s=MONITOR_INTERVAL_S, stop_before_cleanup=STOP_SCRIPTS_BEFORE_CLEANUP, label=LABEL,
+        name_prefix=NAME_PREFIX,
     )

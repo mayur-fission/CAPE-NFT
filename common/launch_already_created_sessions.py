@@ -8,10 +8,10 @@ them with close_launched_sessions() when done. The sessions keep running.
 import posixpath
 from collections import namedtuple
 
-from common.config import env
+from config.config import env
 from common.rstudio_console_commands import get_console_output, r_source_command, wait_for_console_ready
 from common.rstudio_session_helper import is_session_alive, open_existing_session
-from common.rstudio_workbenchjob import check_output_file
+from common.script_outputs import check_output_file
 from common.script_timings import new_run_record, submit_in_each, wait_for_console_runs
 from common.session_actions import close_all_editor_files, recreate_session_folder, set_session_working_directory
 from common.step_log import log_step

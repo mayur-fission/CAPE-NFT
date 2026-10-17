@@ -1,20 +1,18 @@
-"""Watch sessions left running without a tab, and stop their console scripts.
+"""Watching sessions without (or with idle) tabs.
 
-monitor_sessions() polls the session list while the sessions run on their
-own and records every session's status; a session that leaves the list or
-stops being Active/Executing (e.g. Suspended, Failed) is a drop: it is
-logged, the session list is screenshotted and the drop goes to the
-evidence. stop_console_scripts() reopens each session and interrupts its
-running R script before the sessions are quit.
+Flow (close-tab tests): tabs closed -> poll the session list -> a session
+      that leaves the list or stops being Active/Executing is a drop
+      (logged, screenshot, JSON) -> reopen each -> interrupt its script
+Flow (idle soak): tabs open -> every interval: still alive? + list files
 """
 import csv
 import os
 import time
 
-from config.perf_report import attach_allure_file, write_json_report
+from common.perf_report import attach_allure_file, write_json_report
 
 from common import locators
-from common.config import EVIDENCE_DIR
+from config.config import EVIDENCE_DIR
 from common.evidence import save_screenshot
 from common.rstudio_console_commands import CONSOLE_WAIT_TIMEOUT_MS, run_console_command
 from common.rstudio_session_helper import (
@@ -24,6 +22,9 @@ from common.rstudio_session_helper import (
     open_existing_session,
 )
 from common.step_log import log_step
+from config.config import env
+from common.rstudio_session_helper import is_session_alive
+from common.rstudio_console_commands import get_file_list
 
 GONE = "gone from the session list"
 
@@ -127,3 +128,53 @@ def stop_console_scripts(context, home_url, session_names):
         finally:
             tab.close()
     return failures
+
+
+# --- Idle soak: tabs held open together ----------------------------------------
+
+
+IDLE_MINUTES = env("RSTUDIO_SESSION_IDLE_MINUTES", "5")
+
+
+FILE_LIST_POLL_INTERVAL_S = env("RSTUDIO_FILE_LIST_POLL_INTERVAL_SECONDS", "30")
+
+
+def keep_sessions_idle_and_poll_file_list(
+    pages, path, duration_minutes=None, interval_s=None, recursive=False, timeout_ms=15000,
+):
+    """For duration_minutes (default RSTUDIO_SESSION_IDLE_MINUTES), every
+    interval_s (default RSTUDIO_FILE_LIST_POLL_INTERVAL_SECONDS) check each
+    page's session is alive and list the files in `path`. All pages are
+    handled in one loop, since Playwright's sync API can't be shared across
+    threads. Polling stops for a page once its session dies.
+
+    Returns (idle_results, file_results, elapsed_s): one {"index", "ok"[,
+    "error", "failed_after_s"]} dict per page, and per page a list of
+    {"elapsed_s", "files"} snapshots.
+    """
+    minutes = duration_minutes if duration_minutes is not None else float(IDLE_MINUTES)
+    interval_s = interval_s if interval_s is not None else float(FILE_LIST_POLL_INTERVAL_S)
+
+    idle_results = [{"index": i + 1, "ok": True} for i in range(len(pages))]
+    file_results = [[] for _ in pages]
+
+    started = time.time()
+    deadline = started + minutes * 60
+    while time.time() < deadline:
+        time.sleep(max(0, min(interval_s, deadline - time.time())))
+        elapsed_s = time.time() - started
+        for i, page in enumerate(pages):
+            if not idle_results[i]["ok"]:
+                continue
+            if not is_session_alive(page):
+                idle_results[i] = {
+                    "index": i + 1, "ok": False, "error": "session no longer alive", "failed_after_s": elapsed_s,
+                }
+                continue
+            files = get_file_list(page, path, recursive=recursive, timeout_ms=timeout_ms)
+            file_results[i].append({"elapsed_s": elapsed_s, "files": files})
+            print(
+                "\n[rstudio-local] session %d %s at %.1fs: %d file(s) - %s"
+                % (i + 1, path, elapsed_s, len(files), files)
+            )
+    return idle_results, file_results, time.time() - started

@@ -1,12 +1,14 @@
-"""End-of-test teardown: quit the sessions a test created and confirm the
-instance was left as the test found it.
+"""End-of-test teardown: quit the sessions a test created (bulk Quit,
+in rounds, whole list loaded) and check none are left.
+
+Flow: session list -> load all rows -> tick this test's rows -> Quit once
+      -> wait -> repeat -> force-quit stragglers -> verify
 """
 import time
 
 from common.evidence import save_screenshot
 
 from common.rstudio_session_helper import (
-    AUTOMATION_NAME_PREFIXES,
     bulk_quit_sessions,
     goto_session_list,
     load_all_session_rows,
@@ -15,6 +17,7 @@ from common.rstudio_session_helper import (
     session_row_ids_by_name,
     session_row_ids_with_prefix,
 )
+from common.session_naming_logic import AUTOMATION_NAME_PREFIXES
 
 
 def cleanup_multiple_sessions(page, ids, timeout_ms=8000, poll_interval_ms=300, max_attempts=3,
@@ -100,20 +103,14 @@ def quit_sessions_named(page, home_url, session_names):
 
 def cleanup_and_verify_sessions(page, home_url, before_ids, session_names=None,
                                 name_prefixes=AUTOMATION_NAME_PREFIXES, max_rounds=4):
-    """Quit the sessions this test created and assert none are left: rows
-    not in `before_ids` (from row_ids() at the start of the test) that are
-    named one of `session_names`, or, if no names are given, whose name
-    starts with one of `name_prefixes`.
+    """Quit the sessions this test created - new rows (not in `before_ids`)
+    named one of `session_names`, else starting with one of `name_prefixes`
+    - and assert none are left. Other new rows are only reported.
 
-    Other new rows (other people's sessions on a shared account, Workbench
-    job rows, ...) are left alone and only reported, as are pre-existing
-    sessions that vanished. Returns the ids that were quit.
+    Flow: load all rows -> bulk Quit -> reload -> repeat (max_rounds) ->
+          force-quit leftovers one by one in the last round -> verify
 
-    Quits in rounds of one bulk Quit each, re-reading the whole list (every
-    row loaded) between rounds, so a long list - e.g. 200 sessions - is
-    cleared even if not every row was rendered or quit the first time.
-    Sessions are force-quit one at a time only in the last round, or when a
-    round made no progress.
+    Returns the ids quit.
     """
     def _ours():
         goto_session_list(page, home_url, settle_ms=2000)

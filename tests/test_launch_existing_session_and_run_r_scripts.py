@@ -6,7 +6,7 @@ closed.
 import pytest
 
 from common.api_helper import read_session_names, session_ids_csv_path
-from common.config import env, env_path
+from config.config import env, env_path
 from common.launch_already_created_sessions import api_session_names
 from common.script_run_scenarios import run_script_in_existing_sessions_scenario
 

@@ -11,8 +11,9 @@ import time
 
 import pytest
 
-from common.config import env, env_path
+from config.config import env, env_path
 from common.script_run_scenarios import run_script_in_new_sessions_scenario
+from common.session_naming_logic import TEST_167_MULTIPLE_TIMES_NAME_PREFIX
 
 pytestmark = pytest.mark.rstudio_local
 
@@ -24,7 +25,7 @@ RUNS = int(env("HTP_REPEAT_RUNS", "3"))
 WAIT_BETWEEN_RUNS_S = float(env("HTP_REPEAT_WAIT_S", "30"))
 # Own name prefix, so this test can run at the same time as test_167 and the
 # other high-throughput tests (see run_script_in_new_sessions_scenario()).
-SESSION_NAME_PREFIX = "167M_AUTO_SESSION_"
+SESSION_NAME_PREFIX = TEST_167_MULTIPLE_TIMES_NAME_PREFIX
 
 
 def test_high_throughput_script_single_session_timed_167_multiple_times(new_context):

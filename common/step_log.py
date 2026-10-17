@@ -1,10 +1,6 @@
-"""One readable line per test step ("Login successful ...", "RStudio
-session ... created successfully", "R script ... started execution ..."),
-printed for the console / Jenkins log and sent to the "cape_nft" logger,
-so pytest also shows the steps in its log section and the Allure report.
-
-Lines from a browser thread of run_in_parallel_browsers() (named
-browser-B1, browser-B2, ...) are tagged with that browser:
+"""One readable line per test step, printed and sent to the "cape_nft"
+logger (pytest log section, Allure). Lines from a browser thread of
+common.parallel_browsers are tagged with that browser:
 
     [rstudio-local] 15:53:17 | browser B1 | R script htp_10min.R started execution in session CONCURRENT_10MIN_SESSION_1
 """

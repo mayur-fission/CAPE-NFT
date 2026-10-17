@@ -9,8 +9,9 @@ __pycache__/
 .env.*
 !.env.example
 
-# Test output: Allure results/report, timing CSVs, perf JSON, Prometheus
-# config/data/logs (all under evidence/), plus pytest-playwright traces
+# Test output: Allure results/report and each run's own folder
+# (evidence/runs/<time>_<tests>/: CSVs, charts, JSON, screenshots), plus
+# pytest-playwright traces
 evidence/*
 !evidence/.gitkeep
 test-results/

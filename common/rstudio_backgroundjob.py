@@ -1,9 +1,6 @@
-"""RStudio Background Jobs: run an R script as a background job of the
-session (a separate R process next to the console, listed on the IDE's
-Background Jobs tab) and read its state, all through the console.
-
-Unlike a Workbench job these run inside the session, so they end when the
-session is quit.
+"""RStudio Background Jobs: an R script run as a background job of the
+session (inside it - it ends when the session is quit), started and read
+through the console.
 """
 import time
 

@@ -19,15 +19,13 @@ import time
 
 import pytest
 
-from common.concurrent_sessions import (
-    browsers_for,
-    concurrent_session_names,
-    run_script_in_concurrent_sessions,
-    summarize_concurrent_runs,
-)
-from common.config import env, env_path
+from common.concurrent_sessions import run_script_in_concurrent_sessions
+from common.result_printing import summarize_concurrent_runs
+from common.parallel_browsers import browsers_for
+from config.config import env, env_path
 from common.script_timings import script_timings_csv_path, write_script_timings_csv
 from common.session_time_report import describe_run, generate_session_time_report
+from common.session_naming_logic import CONCURRENT_BATCH_SESSION_PREFIX, concurrent_session_names
 
 pytestmark = pytest.mark.rstudio_local
 
@@ -37,7 +35,7 @@ BROWSER_COUNT = browsers_for(
     SESSION_COUNT, int(env("CONCURRENT_BATCH_SESSIONS_BROWSERS") or env("CONCURRENT_SESSIONS_BROWSERS") or 0)
 )
 # Own names, so this test cannot quit test_concurrent_sessions' sessions
-SESSION_NAMES = concurrent_session_names(SESSION_COUNT, prefix="CONCURRENT_BATCH_")
+SESSION_NAMES = concurrent_session_names(SESSION_COUNT, prefix=CONCURRENT_BATCH_SESSION_PREFIX)
 # Gap between starting one browser and the next, so their logins don't clash.
 BROWSER_STAGGER_S = int(env("CONCURRENT_SESSIONS_BROWSER_STAGGER_S", "30"))
 LAUNCH_ATTEMPTS = int(env("CONCURRENT_SESSIONS_LAUNCH_ATTEMPTS", "3"))
@@ -80,6 +78,6 @@ def test_concurrent_sessions_batch_execution(browser_name, browser_type_launch_a
     generate_session_time_report(
         timings_csv, threshold=THRESHOLD_S, browser=browser_name,
         test_name="Batch execution - " + describe_run(SESSION_COUNT, BROWSER_COUNT, USER),
-        notes=SCRIPT_PATH,
+        script=SCRIPT_PATH,
     )
     assert not errors, "\n".join(errors)

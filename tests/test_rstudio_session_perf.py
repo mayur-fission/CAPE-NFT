@@ -6,23 +6,18 @@ test force-quits the sessions it created.
 """
 import pytest
 
-from common.config import env
-from common.helper_function import (
-    close_tabs,
+from config.config import env
+from config.config import is_headless, optional_float, optional_int
+from common.session_batch import close_tabs
+from common.session_actions import login_and_snapshot
+from common.result_printing import (
     describe_launch_project,
     describe_launch_project_text_file,
     describe_launch_project_text_files,
     describe_open_text_files,
     failed,
-    is_headless,
-    login_and_snapshot,
-    optional_float,
-    optional_int,
-    otel_sample,
-    otel_samples,
     print_results,
 )
-from common.otel_metrics import capture_otel_metrics
 from common.perf_scenarios import (
     run_launch_perf_concurrent,
     run_launch_perf_multiple,
@@ -93,7 +88,7 @@ def test_single_session_create_project_and_text_file(page):
     """One user times each step of setting up a session for work.
 
     Flow: login -> launch new session -> create project -> create and save
-    text file -> capture metrics -> quit session
+    text file -> quit session
     """
     home_url, before_ids = login_and_snapshot(page)
 
@@ -116,15 +111,6 @@ def test_single_session_create_project_and_text_file(page):
         assert result.text_file.file_name, "create_text_file() returned no file_name"
         assert result.text_file.folder, "create_text_file() returned no folder"
 
-        capture_otel_metrics(
-            [
-                otel_sample(1, result.launch.elapsed_s, result.launch.bytes_received),
-                otel_sample(2, result.project.elapsed_s),
-                otel_sample(3, result.text_file.elapsed_s),
-            ],
-            run_elapsed=result.launch.elapsed_s + result.project.elapsed_s + result.text_file.elapsed_s,
-            scenario="single_user_project_and_text_file",
-        )
     finally:
         cleanup_and_verify_sessions(page, home_url, before_ids)
 
@@ -135,7 +121,7 @@ def test_sessions_in_tabs_create_project_and_text_file(page, context):
     one after another.
 
     Flow: login -> per tab: launch new session -> create project -> create
-    and save text file -> capture metrics -> close tabs -> quit sessions
+    and save text file -> close tabs -> quit sessions
     """
     home_url, before_ids = login_and_snapshot(page)
 
@@ -149,11 +135,6 @@ def test_sessions_in_tabs_create_project_and_text_file(page, context):
         failures = failed(results)
         assert not failures, "one or more tabs failed: %s" % failures
 
-        capture_otel_metrics(
-            otel_samples(results, lambda r: r["launch_elapsed_s"] + r["project_elapsed_s"] + r["text_file_elapsed_s"]),
-            run_elapsed=run_elapsed,
-            scenario="multiple_sessions_project_and_text_file_in_tabs",
-        )
     finally:
         close_tabs(tabs)
         cleanup_and_verify_sessions(page, home_url, before_ids)
@@ -165,8 +146,8 @@ def test_concurrent_users_create_project_and_text_file(page, request):
     session at the same time.
 
     Flow: login -> per user in parallel: open browser -> login -> launch new
-    session -> create project -> create and save text file -> capture
-    metrics -> quit sessions
+    session -> create project -> create and save text file ->
+    quit sessions
     """
     home_url, before_ids = login_and_snapshot(page)
 
@@ -179,11 +160,6 @@ def test_concurrent_users_create_project_and_text_file(page, request):
         failures = failed(results)
         assert not failures, "one or more users failed: %s" % failures
 
-        capture_otel_metrics(
-            otel_samples(results, lambda r: r["launch_elapsed_s"] + r["project_elapsed_s"] + r["text_file_elapsed_s"]),
-            run_elapsed=run_elapsed,
-            scenario="concurrent_users_project_and_text_file",
-        )
     finally:
         cleanup_and_verify_sessions(page, home_url, before_ids)
 
@@ -195,7 +171,7 @@ def test_concurrent_users_create_project_and_multiple_text_files(page, request):
 
     Flow: login -> per user in parallel: open browser -> login -> launch new
     session -> create project -> create and save TEXT_FILE_COUNT text files
-    -> capture metrics -> quit sessions
+    -> quit sessions
     """
     home_url, before_ids = login_and_snapshot(page)
 
@@ -208,11 +184,6 @@ def test_concurrent_users_create_project_and_multiple_text_files(page, request):
         failures = failed(results)
         assert not failures, "one or more users failed: %s" % failures
 
-        capture_otel_metrics(
-            otel_samples(results, lambda r: r["launch_elapsed_s"] + r["project_elapsed_s"] + sum(r["text_file_elapsed_s"])),
-            run_elapsed=run_elapsed,
-            scenario="concurrent_users_project_and_multiple_text_files",
-        )
     finally:
         cleanup_and_verify_sessions(page, home_url, before_ids)
 
@@ -224,7 +195,7 @@ def test_sequential_sessions_then_concurrent_text_files(page, request):
 
     Flow: login -> launch SESSION_COUNT sessions with projects in turn ->
     per session in parallel: open browser -> reopen session -> create and
-    save TEXT_FILE_COUNT text files -> capture metrics -> quit sessions
+    save TEXT_FILE_COUNT text files -> quit sessions
     """
     home_url, before_ids = login_and_snapshot(page)
 
@@ -237,12 +208,6 @@ def test_sequential_sessions_then_concurrent_text_files(page, request):
         launch_failures = failed(launch_results)
         assert not launch_failures, "one or more sessions failed to launch: %s" % launch_failures
 
-        capture_otel_metrics(
-            otel_samples(launch_results, lambda r: r["launch_elapsed_s"] + r["project_elapsed_s"]),
-            run_elapsed=launch_run_elapsed,
-            scenario="multiple_sessions_with_projects",
-        )
-
         session_names = [r["session_name"] for r in launch_results]
         files_results, files_run_elapsed = concurrent_create_text_files(
             session_names, file_count=TEXT_FILE_COUNT, headless=is_headless(request)
@@ -252,10 +217,5 @@ def test_sequential_sessions_then_concurrent_text_files(page, request):
         files_failures = failed(files_results)
         assert not files_failures, "one or more sessions failed to write files: %s" % files_failures
 
-        capture_otel_metrics(
-            otel_samples(files_results, lambda r: r["open_elapsed_s"] + sum(r["text_file_elapsed_s"])),
-            run_elapsed=files_run_elapsed,
-            scenario="concurrent_text_files_in_existing_sessions",
-        )
     finally:
         cleanup_and_verify_sessions(page, home_url, before_ids)

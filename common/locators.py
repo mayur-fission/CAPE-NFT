@@ -1,5 +1,5 @@
-"""Selectors and visible texts for the Posit Workbench / RStudio Pro UI,
-grouped by the screen they belong to. Update them here when the UI changes.
+"""Selectors and visible texts of the Posit Workbench / RStudio Pro UI,
+grouped by screen. Update them here when the UI changes.
 """
 
 # --- Sign-in page (login()) -------------------------------------------------
