@@ -160,7 +160,7 @@ def browser_name_prefixes(browser_count):
 
 
 def run_in_parallel_browsers(browser_name, launch_args, context_args, prefixes, worker, barriers=(),
-                             stagger_s=0):
+                             stagger_s=0, join_timeout_s=None, debug_ports=None):
     """Open one browser per entry in `prefixes`, each in its own thread with
     its own Playwright (the sync API cannot share one between threads), and
     call worker(context, prefix) there with a new context of that browser.
@@ -171,6 +171,15 @@ def run_in_parallel_browsers(browser_name, launch_args, context_args, prefixes, 
 
     If a thread fails outside worker - or worker raises - each of `barriers`
     is aborted, so the other threads waiting on them are not stuck.
+
+    With join_timeout_s, stops waiting for the threads after that long: a
+    thread still running (e.g. frozen inside a Playwright call) is reported
+    as a TimeoutError and left behind (daemon thread, ended with the
+    process), so one stuck browser cannot hang the test for ever.
+
+    With debug_ports ({prefix: port}, Chromium only), each browser listens
+    for DevTools on 127.0.0.1:<port>, so another thread can connect to it
+    and screenshot its tabs while the browser's own thread is stuck.
     """
     results = [None] * len(prefixes)
 
@@ -179,8 +188,11 @@ def run_in_parallel_browsers(browser_name, launch_args, context_args, prefixes, 
             if index and stagger_s:
                 print("\n[rstudio-local] browser %s: starting in %ds" % (prefix, index * stagger_s))
                 time.sleep(index * stagger_s)
+            args = dict(launch_args)
+            if debug_ports and prefix in debug_ports and browser_name == "chromium":
+                args["args"] = list(args.get("args") or []) + ["--remote-debugging-port=%d" % debug_ports[prefix]]
             with sync_playwright() as playwright:
-                browser = getattr(playwright, browser_name).launch(**launch_args)
+                browser = getattr(playwright, browser_name).launch(**args)
                 log_step("Browser %s started (%s)", prefix.rstrip("_"), browser_name)
                 try:
                     context = browser.new_context(**{**context_args, "ignore_https_errors": True})
@@ -195,13 +207,21 @@ def run_in_parallel_browsers(browser_name, launch_args, context_args, prefixes, 
                 barrier.abort()
 
     threads = [
-        threading.Thread(target=_run, args=(i, prefix), name="browser-%s" % prefix.rstrip("_"))
+        threading.Thread(target=_run, args=(i, prefix), name="browser-%s" % prefix.rstrip("_"),
+                         daemon=join_timeout_s is not None)
         for i, prefix in enumerate(prefixes)
     ]
     for thread in threads:
         thread.start()
-    for thread in threads:
-        thread.join()
+    deadline = time.time() + join_timeout_s if join_timeout_s is not None else None
+    for i, thread in enumerate(threads):
+        thread.join(None if deadline is None else max(0, deadline - time.time()))
+        if thread.is_alive():
+            print("\n[rstudio-local] browser %s still running after %ds - not waiting for it any longer"
+                  % (prefixes[i], join_timeout_s))
+            results[i] = (prefixes[i], None, TimeoutError(
+                "browser did not finish within %ds (stuck - its sessions may need deleting by hand)"
+                % join_timeout_s))
     return results
 
 

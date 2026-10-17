@@ -759,7 +759,7 @@ pipeline {
             // Always: reports, timings, metrics and session time charts
             // (common/session_time_report.py), and the failure screenshots of
             // tests using the page fixture (test-results/); every screenshot is in Allure.
-            archiveArtifacts artifacts: 'evidence/**/*.csv, evidence/**/*.json, evidence/rstudio_script_timings_*.png, test-results/**',
+            archiveArtifacts artifacts: 'evidence/**/*.csv, evidence/**/*.json, evidence/rstudio_script_timings_*.png, evidence/stuck_*.png, test-results/**',
                              excludes: 'evidence/output_*', allowEmptyArchive: true
             script {
                 if (params.CAPTURE_TEST_DATA?.toString() == 'true') {

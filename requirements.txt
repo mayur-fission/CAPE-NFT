@@ -29,3 +29,7 @@ opentelemetry-exporter-prometheus==0.65b0
 PyYAML==6.0.3
 # CloudWatch server/DB snapshots (common/cloudwatch_metrics.py)
 boto3==1.35.36
+
+# Screenshots of stuck browsers over DevTools (common/concurrent_sessions.py;
+# optional - without it only the tab list is saved)
+websocket-client==1.9.0

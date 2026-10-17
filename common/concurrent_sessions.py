@@ -9,10 +9,14 @@ other before the scripts start, so the runs overlap, and before cleanup.
 
 Run records use the common.script_timings format.
 """
+import base64
+import json
 import math
 import os
+import socket
 import threading
 import time
+import urllib.request
 
 from config.perf_report import attach_allure_file, write_json_report
 
@@ -43,6 +47,191 @@ DEFAULT_TABS_PER_BROWSER = 5
 # Working directory set in every session right after it launches; the
 # script itself then runs in its own <output_dir>/<session name> folder.
 SESSION_HOME_DIR = env_path("WORKBENCH_HOME_DIR", "CONCURRENT_SESSIONS_HOME_DIR")
+
+
+# How long a browser may stay in one stage, while other browsers are already
+# done, before its tabs are captured as possibly stuck (screenshots + URLs).
+STUCK_CAPTURE_S = int(env("CONCURRENT_STUCK_CAPTURE_S", "600"))
+
+
+def _free_port():
+    """A free local TCP port for a browser's DevTools endpoint."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _screenshot_target(ws_url, path, timeout_s=15):
+    """Page.captureScreenshot over the tab's own DevTools websocket. Raises
+    on failure (a frozen tab does not answer: timeout)."""
+    import websocket  # websocket-client (requirements.txt)
+    ws = websocket.create_connection(ws_url, timeout=timeout_s, suppress_origin=True)
+    try:
+        ws.send(json.dumps({"id": 1, "method": "Page.captureScreenshot", "params": {"format": "png"}}))
+        while True:
+            msg = json.loads(ws.recv())
+            if msg.get("id") == 1:
+                break
+    finally:
+        ws.close()
+    if "result" not in msg:
+        raise RuntimeError(msg.get("error"))
+    with open(path, "wb") as f:
+        f.write(base64.b64decode(msg["result"]["data"]))
+
+
+def capture_stuck_browser(port, prefix, label, stage, since, timeout_s=120):
+    """Capture a browser whose own thread is stuck, through its DevTools
+    port: the tab list (URL and title of every tab - the browser process
+    answers it even when a tab is frozen) and a screenshot of each tab over
+    that tab's own DevTools connection (a frozen tab cannot render one, so it
+    gets the error instead). Playwright's connect_over_cdp() is not used: it
+    initialises every tab first and so hangs on the frozen one.
+
+    Writes evidence/stuck_<label>_<browser>_<time>.json (stage, for how
+    long, the tabs) and stuck_..._tab<n>_<time>.png. Without websocket-client
+    only the tab list is saved. Gives up after timeout_s. Returns the paths
+    written."""
+    browser_id = prefix.rstrip("_")
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    info = {"browser": browser_id, "stage": stage, "stuck_for_s": round(time.time() - since),
+            "captured_at": time.strftime("%Y-%m-%d %H:%M:%S"), "tabs": []}
+    paths = []
+
+    def _run():
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:%d/json/list" % port, timeout=15) as resp:
+                targets = [t for t in json.load(resp) if t.get("type") == "page"]
+        except Exception as exc:
+            info["error"] = "could not list the tabs: %s" % " ".join(str(exc).split())[:200]
+            return
+        try:
+            import websocket  # noqa: F401 - only to check it is installed
+            can_screenshot = True
+        except ImportError:
+            can_screenshot = False
+            info["note"] = "websocket-client not installed - tab list only, no screenshots"
+        for n, target in enumerate(targets, 1):
+            tab = {"tab": n, "title": target.get("title"), "url": target.get("url")}
+            if can_screenshot and target.get("webSocketDebuggerUrl"):
+                path = os.path.join(EVIDENCE_DIR, "stuck_%s_%s_tab%d_%s.png" % (label, browser_id, n, stamp))
+                try:
+                    _screenshot_target(target["webSocketDebuggerUrl"], path)
+                    tab["screenshot"] = os.path.basename(path)
+                    paths.append(path)
+                except Exception as exc:
+                    tab["screenshot_error"] = (" ".join(str(exc).split())[:200]
+                                               or "no answer - the tab looks frozen")
+            info["tabs"].append(tab)
+
+    thread = threading.Thread(target=_run, name="capture-%s" % browser_id, daemon=True)
+    thread.start()
+    thread.join(timeout_s)
+    if thread.is_alive():
+        info["error"] = "capture did not finish within %ds" % timeout_s
+    json_path = os.path.join(EVIDENCE_DIR, "stuck_%s_%s_%s.json" % (label, browser_id, stamp))
+    write_json_report(json_path, info)
+    log_step("Captured possibly stuck browser %s (%s for %ds): %d tab(s), %d screenshot(s)%s -> %s",
+             browser_id, stage, info["stuck_for_s"], len(info["tabs"]), len(paths),
+             " - " + info["error"] if "error" in info else "", json_path)
+    return [json_path] + paths
+
+
+class _BrowserProgress:
+    """What each browser of a concurrent run is doing, and the wait before
+    cleanup: every browser waits until all of them are done (or the wait
+    times out). While it waits, the first browser that finished logs, every
+    report_every_s, which browsers it is still waiting for and what they are
+    doing, and captures (capture_stuck_browser()) any that has stayed in one
+    stage for STUCK_CAPTURE_S - and every one still not done when the wait
+    gives up. Captured files are collected in `captured` for the caller to
+    attach to Allure from the test's own thread."""
+
+    def __init__(self, prefixes, label="", debug_ports=None, report_every_s=60):
+        self._cond = threading.Condition()
+        self._stage = {p: ("starting", time.time()) for p in prefixes}
+        self._done = set()
+        self._aborted = False
+        self._reporter = None
+        self._report_every_s = report_every_s
+        self._label = label
+        self._ports = debug_ports or {}
+        self._captured_stage = {}   # prefix -> the stage it was captured in
+        self.captured = []          # evidence files written by the captures
+
+    def set(self, prefix, stage):
+        with self._cond:
+            self._stage[prefix] = (stage, time.time())
+
+    def stage(self, prefix):
+        with self._cond:
+            return self._stage[prefix][0]
+
+    def abort(self):
+        """A browser thread died outside its worker: stop waiting for it."""
+        with self._cond:
+            self._aborted = True
+            self._cond.notify_all()
+
+    def pending(self):
+        """'B24 (launching sessions, 7 min), ...' for the browsers not done."""
+        now = time.time()
+        return ", ".join(
+            "%s (%s, %d min)" % (p.rstrip("_"), stage, (now - since) // 60)
+            for p, (stage, since) in sorted(self._stage.items(), key=lambda kv: int(kv[0][1:-1]))
+            if p not in self._done
+        )
+
+    def capture(self, prefixes):
+        """Capture each of `prefixes` (not done, not yet captured in its
+        current stage) that has a DevTools port."""
+        for prefix in prefixes:
+            with self._cond:
+                stage, since = self._stage[prefix]
+                if prefix in self._done or self._captured_stage.get(prefix) == stage:
+                    continue
+                self._captured_stage[prefix] = stage
+            if prefix in self._ports:
+                self.captured += capture_stuck_browser(self._ports[prefix], prefix, self._label, stage, since)
+
+    def done_and_wait(self, prefix, timeout_s):
+        """Mark `prefix` done, then wait up to timeout_s for the others.
+        Returns True when all are done, False on timeout."""
+        deadline = time.time() + timeout_s
+        with self._cond:
+            self._done.add(prefix)
+            self._stage[prefix] = ("done", time.time())
+            if self._reporter is None:
+                self._reporter = prefix
+            self._cond.notify_all()
+        last_report = time.time()
+        while True:
+            with self._cond:
+                if len(self._done) == len(self._stage) or self._aborted:
+                    return True
+                left = deadline - time.time()
+                if left <= 0:
+                    pending = [p for p in self._stage if p not in self._done]
+                    log_step("Gave up waiting after %ds - cleaning up anyway; still not done: %s",
+                             timeout_s, self.pending())
+                    reporter = prefix == self._reporter
+                    break
+                self._cond.wait(min(self._report_every_s, left))
+                reporter = prefix == self._reporter
+                now = time.time()
+                slow = [p for p, (_, since) in self._stage.items()
+                        if p not in self._done and now - since >= STUCK_CAPTURE_S]
+                report = (reporter and len(self._done) < len(self._stage)
+                          and now - last_report >= self._report_every_s)
+                if report:
+                    log_step("Still waiting for %d browser(s) before cleanup: %s",
+                             len(self._stage) - len(self._done), self.pending())
+                    last_report = now
+            if reporter and slow:
+                self.capture(slow)   # outside the lock: a capture takes up to a couple of minutes
+        if reporter:
+            self.capture(pending)
+        return False
 
 
 def concurrent_session_names(count, prefix=CONCURRENT_SESSION_PREFIX):
@@ -109,48 +298,78 @@ def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, u
                   % (prefix.rstrip("_"), len(names), MAX_TABS_PER_BROWSER))
 
     ready = threading.Barrier(browser_count)
-    done = threading.Barrier(browser_count)
+    # Each Chromium gets a DevTools port, so a stuck one can be captured from another thread
+    debug_ports = {p: _free_port() for p in prefixes} if browser_name == "chromium" else {}
+    progress = _BrowserProgress(prefixes, label=label, debug_ports=debug_ports)
     launch_failed = set()
+    # Longest a finished browser waits for the others before cleaning up: the
+    # slowest legitimate case is the last browser starting late, retrying
+    # every launch and running the script to its timeout.
+    cleanup_wait_s = int(env("CONCURRENT_CLEANUP_WAIT_S") or (
+        script_timeout_ms / 1000.0 + attempts * (launch_timeout_ms / 1000.0 + retry_wait_s)
+        + stagger_s * browser_count + 300))
 
     def _worker(context, prefix):
         return _run_script_in_browser(
             context, prefix, names_by_browser[prefix], user, "%s %s" % (label, prefix.rstrip("_")),
-            ready, done, launch_failed, attempts, launch_timeout_ms, retry_wait_s,
+            ready, progress, launch_failed, attempts, launch_timeout_ms, retry_wait_s,
             script_path, output_dir, output_file_name, script_timeout_ms, delete_output, poll_interval_ms,
-            start_together,
+            start_together, cleanup_wait_s,
         )
 
     results = run_in_parallel_browsers(
-        browser_name, launch_args, context_args, prefixes, _worker, barriers=(ready, done), stagger_s=stagger_s,
+        browser_name, launch_args, context_args, prefixes, _worker, barriers=(ready, progress),
+        stagger_s=stagger_s,
+        # a browser frozen inside a Playwright call must not hang the test for ever
+        join_timeout_s=stagger_s * browser_count + cleanup_wait_s * 2 + 900,
+        debug_ports=debug_ports,
     )
     runs, errors = [], []
     for prefix, result, error in results:
         if result is not None:
             browser_runs, error = result
             runs += browser_runs
+        else:
+            # a browser that never returned (stuck) or died: capture it if that
+            # has not happened yet, and keep its sessions in the results as failed
+            if isinstance(error, TimeoutError):
+                progress.capture([prefix])
+            reason = ("browser stuck: %s" % progress.stage(prefix) if isinstance(error, TimeoutError)
+                      else "browser failed: %s" % " ".join(str(error).split())[:150])
+            seen = {r["session_name"] for r in runs}
+            runs += [{"session_name": name, "started": None, "ended": None, "status": reason}
+                     for name in names_by_browser[prefix] if name not in seen]
         if error is not None:
             errors.append("browser %s: %s" % (prefix.rstrip("_"), error))
+    # attach the stuck-browser captures from the test's own thread (Allure is per thread)
+    for path in progress.captured:
+        attach_allure_file(path)
     return runs, errors
 
 
-def _run_script_in_browser(context, prefix, session_names, user, label, ready, done, launch_failed,
+def _run_script_in_browser(context, prefix, session_names, user, label, ready, progress, launch_failed,
                            attempts, launch_timeout_ms, retry_wait_s, script_path, output_dir,
                            output_file_name, script_timeout_ms, delete_output=False, poll_interval_ms=500,
-                           start_together=True):
+                           start_together=True, cleanup_wait_s=3600):
     """One browser's part of run_script_in_concurrent_sessions(); a browser
-    whose launch fails adds its prefix to `launch_failed`. Returns (runs,
-    error): its run records and the error that failed it, else None."""
+    whose launch fails adds its prefix to `launch_failed`. Each stage is
+    recorded in `progress` (a _BrowserProgress), which also holds the wait
+    for the other browsers before cleanup. Returns (runs, error): its run
+    records and the error that failed it, else None."""
     where = " in browser %s" % prefix.rstrip("_")
     home_url = before_ids = None
     launched, runs, error = [], [], None
     try:
         try:
+            progress.set(prefix, "logging in")
             home_url, before_ids = login_and_quit_sessions_named([context], user, session_names)
+            progress.set(prefix, "launching sessions")
             launched, failed = launch_sessions_in_tabs(
                 context, home_url, session_names, attempts=attempts, launch_timeout_ms=launch_timeout_ms,
                 retry_wait_s=retry_wait_s, where=where,
             )
             assert not failed, "sessions that failed to launch: %s" % failed
+            progress.set(prefix, "setting working directories")
             for session in launched:
                 for attempt in range(1, SETWD_ATTEMPTS + 1):
                     try:
@@ -169,6 +388,7 @@ def _run_script_in_browser(context, prefix, session_names, user, label, ready, d
             raise
         finally:
             if start_together:
+                progress.set(prefix, "waiting for the other browsers to be ready")
                 log_step("%d of %d session(s) ready in this browser - waiting for the other browsers",
                          len(launched), len(session_names))
                 ready.wait()
@@ -181,6 +401,7 @@ def _run_script_in_browser(context, prefix, session_names, user, label, ready, d
         else:
             log_step("All %d session(s) of this browser are ready - starting the R script %s in them now",
                      len(launched), os.path.basename(script_path))
+        progress.set(prefix, "running the R script / checking outputs")
         started = time.time()
         runs += run_script_in_launched_sessions(
             launched, script_path, working_dir=output_dir, timeout_ms=script_timeout_ms,
@@ -193,10 +414,9 @@ def _run_script_in_browser(context, prefix, session_names, user, label, ready, d
         error = exc
     finally:
         log_step("This browser is done - waiting for the other browsers to finish before cleanup")
-        try:
-            done.wait()
-        except threading.BrokenBarrierError:
-            pass
+        if not progress.done_and_wait(prefix, cleanup_wait_s) and error is None:
+            error = AssertionError("cleaned up without waiting for browser(s) still not done after %ds: %s"
+                                   % (cleanup_wait_s, progress.pending()))
         close_launched_sessions(launched)
         if launched:
             log_step("Closed %d session tab(s)", len(launched))
