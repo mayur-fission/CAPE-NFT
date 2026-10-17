@@ -33,7 +33,10 @@ TEST_FILES = [
     'test_active_session_count'                           :
         'Count Active + Executing sessions every 10 s. It logs in first, the other ticked tests ' +
         'start once it has (it runs alongside them), and it stops when they all finish or after ACTIVE_SESSIONS_MONITOR_S (20 min)',
-    'test_create_sessions_run_r_close_browser'            : 'Scripts and Workbench jobs keep running after the tab closes',
+    'test_run_r_close_browser'                            : 'Scripts and Workbench jobs keep running after the tab closes',
+    'test_run_r_close_browser_batch_execution'            :
+        'Like test_run_r_close_browser, in batches: each browser starts the R script in its sessions as soon as they are ' +
+        'launched, closes the tabs and watches for dropped sessions; stop + cleanup once every browser is done',
     'test_167'                                            : 'US 167 - high-throughput script, timed',
     'test_167_multiple_times'                             :
         'US 167 - the test_167 run repeated HTP_REPEAT_RUNS times, HTP_REPEAT_WAIT_S seconds apart',
@@ -133,7 +136,7 @@ for (name in TEST_NAMES) {
 jobParams << string(name: 'SESSION_COUNT', defaultValue: '10',
     description: '[Shared] Sessions each multi-session test launches (sets RSTUDIO_SESSION_COUNT, overriding .env). Whole ' +
                  'number, at least 1. Default: 10. Used by: test_168 and ' +
-                 'test_create_sessions_run_r_close_browser. Not used by the concurrent-session tests (see below)')
+                 'test_run_r_close_browser. Not used by the concurrent-session tests (see below)')
 jobParams << string(name: 'UI_BROWSER_STAGGER_S', defaultValue: '30',
     description: '[Shared] Seconds between starting one browser and the next within a test, so their logins do not ' +
                  'collide. Whole number, 0 or more. Default: 30. A run with N browsers takes (N-1) x this to get them all ' +
@@ -181,7 +184,7 @@ jobParams << string(name: 'HTP_REPEAT_WAIT_S', defaultValue: '30',
     description: '[Other tests] test_167_multiple_times: seconds to wait before each run after the first. ' +
                  'Whole number, 0 or more. Default: 30')
 jobParams << string(name: 'CLOSE_BROWSER_WAIT_S', defaultValue: '',
-    description: '[Other tests] test_create_sessions_run_r_close_browser: seconds the sessions keep running with their tabs ' +
+    description: '[Other tests] test_run_r_close_browser: seconds the sessions keep running with their tabs ' +
                  'closed before they are quit. Whole number. Blank (default) = RSTUDIO_WORKBENCH_JOB_TEST_DURATION_SECONDS ' +
                  'from .env (300 if not set there)')
 // --- Active session count ---

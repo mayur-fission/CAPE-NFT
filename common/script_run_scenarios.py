@@ -26,6 +26,7 @@ from common.script_timings import failed_runs, script_timings_csv_path, write_sc
 from common.rstudio_session_helper import AUTO_PERF_NAME_PREFIX
 from common.session_actions import login_to_posit_workbench
 from common.session_cleanup import cleanup_and_verify_sessions
+from common.session_monitor import monitor_sessions, stop_console_scripts
 
 
 def print_script_runs_summary(label, runs, script_path, started):
@@ -133,26 +134,50 @@ def start_jobs_close_tabs_then_stop_jobs_scenario(context, session_count, script
         cleanup_and_verify_sessions(home_page, home_url, before_ids)
 
 
-def source_script_close_tabs_then_quit_scenario(context, session_count, script_path, wait_s):
+def source_script_close_tabs_then_quit_scenario(context, session_count, script_path, wait_s,
+                                                monitor_interval_s=None, stop_before_cleanup=False,
+                                                label="close_tab"):
     """Launch `session_count` new sessions, each in its own tab, source
     `script_path` in the console and close the tab without waiting for it.
     After `wait_s`, quit every session created, which ends the script.
     Returns the ids of the sessions quit.
+
+    With monitor_interval_s, the wait watches the session list instead of
+    sleeping (common.session_monitor.monitor_sessions(): drops are logged,
+    screenshotted and saved under `label`). With stop_before_cleanup, the
+    script is interrupted in every session still running before the
+    sessions are quit. Either way, the sessions are quit first and then an
+    AssertionError lists the dropped sessions and the ones whose script
+    could not be stopped.
     """
     home_page = context.new_page()
     home_url, before_ids = login_and_snapshot(home_page)
     quit_ids = None
+    drops, stop_failures = [], {}
 
     try:
-        launch_sessions_and_source_script(context, home_url, session_count, script_path)
+        session_names = launch_sessions_and_source_script(context, home_url, session_count, script_path)
 
-        print("\n[rstudio-local] all tabs closed, waiting %.0fs before quitting sessions" % wait_s)
-        home_page.wait_for_timeout(wait_s * 1000)
+        if monitor_interval_s:
+            print("\n[rstudio-local] all tabs closed, watching the sessions for %.0fs before quitting them" % wait_s)
+            drops = monitor_sessions(home_page, home_url, session_names, wait_s, monitor_interval_s, label)
+        else:
+            print("\n[rstudio-local] all tabs closed, waiting %.0fs before quitting sessions" % wait_s)
+            home_page.wait_for_timeout(wait_s * 1000)
+
+        if stop_before_cleanup:
+            dropped = {d["session"] for d in drops}
+            stop_failures = stop_console_scripts(context, home_url, [n for n in session_names if n not in dropped])
 
         started = time.time()
         quit_ids = cleanup_and_verify_sessions(home_page, home_url, before_ids)
         print("\n[rstudio-local] quit %d session(s) in %.2fs" % (len(quit_ids), time.time() - started))
-        return quit_ids
     finally:
         if quit_ids is None:
             cleanup_and_verify_sessions(home_page, home_url, before_ids)
+
+    problems = ["dropped while its tab was closed: %s (%s after %ds)" % (d["session"], d["status"], d["seconds_after_start"])
+                for d in drops]
+    problems += ["script could not be stopped: %s (%s)" % item for item in stop_failures.items()]
+    assert not problems, "\n".join(problems)
+    return quit_ids

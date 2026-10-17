@@ -306,13 +306,15 @@ def launch_sessions_and_source_script(context, home_url, session_count, script_p
     """Launch `session_count` new sessions, each in its own tab, setwd to
     `working_dir` (default RSTUDIO_WORKING_DIR; skipped if neither is set),
     source `script_path` in the console and close the tab without waiting for
-    the script to finish.
+    the script to finish. Returns the names of the sessions launched.
     """
     source_command = r_source_command(script_path)
+    session_names = []
     for _ in range(session_count):
         tab = context.new_page()
         try:
             launch = launch_new_session(tab, home_url)
+            session_names.append(launch.session_name)
             set_session_working_directory(tab, path=working_dir)
             submit_console_command(tab, source_command)
             # The console echoes the command once R has accepted it.
@@ -326,6 +328,7 @@ def launch_sessions_and_source_script(context, home_url, session_count, script_p
             )
         finally:
             tab.close()
+    return session_names
 
 
 def check_output_file(page, record, output_path, delete=False, remove_dir=None):

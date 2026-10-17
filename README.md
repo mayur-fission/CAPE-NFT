@@ -49,7 +49,7 @@ Server paths have no defaults in the code: every folder, R script and
 | `RSTUDIO_WORKING_DIR` | Working folder for new sessions (also the API tests) |
 | `WORKING_DIR_EXISTING_SESSIONS` | Working folder in existing sessions (optional; defaults to `RSTUDIO_WORKING_DIR`) |
 | `R_SCRIPT_HIGH_THROUGHPUT` / `OUTPUT_DIR_HIGH_THROUGHPUT` | test_167, test_168, test_167_multiple_times, test_run_high_throughput_job, test_launch_existing_session_and_run_r_scripts |
-| `R_SCRIPT_CLOSE_TAB_JOB` | test_create_sessions_run_r_close_browser |
+| `R_SCRIPT_CLOSE_TAB_JOB` | test_run_r_close_browser |
 | `R_SCRIPT_GENERATE_CSV` / `OUTPUT_DIR_GENERATE_CSV` | The CSV-session (group) tests |
 | `R_SCRIPT_GROUP_B_WORKBENCH_JOB`, `R_SCRIPT_GROUP_B_BACKGROUND_JOB` | Group B jobs in the group tests |
 | `R_SCRIPT_CONCURRENT_SESSIONS` / `OUTPUT_DIR_CONCURRENT_SESSIONS` | test_concurrent_sessions (optional; default to the CSV ones) |
@@ -88,7 +88,8 @@ Each test's docstring has a `Flow:` line (e.g. `login -> launch new session
 | `test_rstudio_session_perf.py` | Launch time (single / sequential / concurrent), projects, text files |
 | `test_rstudio_run_r_script_perf.py` | R script time in new sessions, one or many users |
 | `test_rstudio_source_script_perf.py` | R script time in existing sessions |
-| `test_create_sessions_run_r_close_browser.py` | Scripts and Workbench jobs keep running after the tab closes |
+| `test_run_r_close_browser.py` | Scripts and Workbench jobs keep running after the tab closes |
+| `test_run_r_close_browser_batch_execution.py` | The same in batches over several browsers: each browser starts as soon as its sessions are up, drops are captured, cleanup once all are done |
 | `test_run_high_throughput_job.py`, `test_167.py`, `test_168.py` | High-throughput script, timed |
 | `test_launch_sessions_api_user1.py` | Create / relaunch sessions through the API only |
 | `test_create_session_through_api_and_run_script*.py` | API-created sessions driven in the browser, incl. mixed workloads |
