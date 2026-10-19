@@ -14,6 +14,7 @@ attached to Allure along with the screenshots. Set
 CONCURRENT_10MIN_THRESHOLD_S to mark a slow-session limit on the charts.
 """
 import posixpath
+import time
 
 import pytest
 
@@ -51,7 +52,10 @@ SCRIPT_OUTPUTS = {
 OUTPUT_FILE_NAME = env("CONCURRENT_10MIN_OUTPUT_FILE", SCRIPT_OUTPUTS.get(posixpath.basename(SCRIPT_PATH), ""))
 # The script runs for ~10 minutes; leave headroom on top.
 SCRIPT_TIMEOUT_MS = int(env("CONCURRENT_10MIN_SCRIPT_TIMEOUT_MS", "900000"))
-TIMINGS_LABEL = "concurrent_10min_%d_sessions_%d_browsers_U%d" % (SESSION_COUNT, BROWSER_COUNT, USER)
+# Run start time in the name: every run writes its own CSV, charts and
+# summary instead of overwriting another's
+TIMINGS_LABEL = "concurrent_10min_%d_sessions_%d_browsers_U%d_%s" % (
+    SESSION_COUNT, BROWSER_COUNT, USER, time.strftime("%Y%m%d-%H%M%S"))
 # Slow-session limit drawn on the session time charts (blank = none).
 THRESHOLD_S = float(env("CONCURRENT_10MIN_THRESHOLD_S") or 0) or None
 # Delete each session's output once it has been checked, so it does not pile

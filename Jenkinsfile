@@ -61,15 +61,24 @@ TEST_FILES = [
     'test_concurrent_sessions'                          :
         'CONCURRENT_SESSIONS UI-created sessions (CONCURRENT_SESSION_1, _2, ...) over CONCURRENT_SESSIONS_BROWSERS ' +
         'browsers, R script sourced in all at once and timed, with session time charts',
+    'test_concurrent_sessions_u1'                       :
+        'Same as test_concurrent_sessions (same CONCURRENT_SESSIONS settings), with sessions named ' +
+        'U1_CONCURRENT_SESSION_<N> so both can run at once as the same user',
     'test_concurrent_sessions_batch_execution'          :
         'Like test_concurrent_sessions (same CONCURRENT_SESSIONS settings), but each browser starts the R script ' +
         'as soon as its own sessions are launched; cleanup waits until every browser has finished',
     'test_concurrent_sessions_10min'                    :
         'CONCURRENT_10MIN_SESSIONS UI-created sessions run the ~10 minute R script (htp_10min.R) at once, timed, ' +
         'with charts',
+    'test_concurrent_sessions_10min_u1'                 :
+        'Same as test_concurrent_sessions_10min (same CONCURRENT_10MIN settings), with sessions named ' +
+        'U1_CONCURRENT_10MIN_SESSION_<N> so both can run at once as the same user',
     'test_concurrent_sessions_30min'                    :
         'CONCURRENT_30MIN_SESSIONS UI-created sessions run the ~30 minute R script (htp_30min.R) at once, timed, ' +
         'with charts',
+    'test_concurrent_sessions_30min_u1'                 :
+        'Same as test_concurrent_sessions_30min (same CONCURRENT_30MIN settings), with sessions named ' +
+        'U1_CONCURRENT_30MIN_SESSION_<N> so both can run at once as the same user',
     // --- UI-created sessions with mixed workloads
     'test_create_session_through_ui_and_run_script_group' :
         'UI-created sessions, mixed workloads',
@@ -94,6 +103,12 @@ TEST_FILES = [
         'using',
 ]
 TEST_NAMES = new ArrayList(TEST_FILES.keySet())
+// Copies of other tests under U1_ session names, for running next to them as
+// the same user: only when ticked, never with RUN_ALL (that would double the
+// concurrent-session load).
+RUN_ALL_SKIPS = ['test_concurrent_sessions_u1', 'test_concurrent_sessions_10min_u1',
+                 'test_concurrent_sessions_30min_u1']
+RUN_ALL_TESTS = TEST_NAMES.findAll { !(it in RUN_ALL_SKIPS) }
 // The test USE_EC2_NODES spreads over the NODE_LABELS agents.
 MULTI_NODE_TEST = 'test_create_session_through_ui_and_run_script_group_multi_browser'
 // Written when every other parallel test has finished; test_active_session_count
@@ -158,8 +173,8 @@ jobParams << string(name: 'PARALLEL_LOGIN_GAP_S', defaultValue: '30',
                  'tests, since Workbench fails sign-ins that happen at the same time. Whole number, 0 or more. Default: 30. ' +
                  'Ignored when RUN_IN_PARALLEL is unticked')
 jobParams << booleanParam(name: 'RUN_ALL', defaultValue: false,
-    description: '[How tests run] Ticked: run every test file below, whatever is ticked. Unticked (default): only the ' +
-                 'ticked files run (at least one is required)')
+    description: '[How tests run] Ticked: run every test file below (except the _u1 copies), whatever is ticked. ' +
+                 'Unticked (default): only the ticked files run (at least one is required)')
 // --- Tests to run (one checkbox per file) ---
 for (name in TEST_NAMES) {
     jobParams << booleanParam(name: name, defaultValue: false, description: TEST_FILES[name])
@@ -469,7 +484,7 @@ pipeline {
         stage('Select tests') {
             steps {
                 script {
-                    def selected = params.RUN_ALL ? TEST_NAMES : TEST_NAMES.findAll { params[it] }
+                    def selected = params.RUN_ALL ? RUN_ALL_TESTS : TEST_NAMES.findAll { params[it] }
                     // A field added since the last build has no value yet: skip it, its default applies.
                     if (params.ACTIVE_SESSIONS_USERS != null && !(params.ACTIVE_SESSIONS_USERS.trim() ==~ /\d+(\s*,\s*\d+)*/)) {
                         error("ACTIVE_SESSIONS_USERS must be user numbers separated by commas (e.g. 1,2), got '${params.ACTIVE_SESSIONS_USERS}'")
@@ -521,7 +536,7 @@ pipeline {
                     env.TEST_PATHS = selected.collect { "tests/${it}.py" }.join(' ')
                     env.SELECTED_TESTS = selected.join(',')
                     currentBuild.description = "${params.ENVIRONMENT}: " +
-                        (selected.size() == TEST_NAMES.size() ? 'all tests' : selected.join(', ')) +
+                        (params.RUN_ALL ? 'all tests' : selected.join(', ')) +
                         (nodeLabels ? " (on ${nodeLabels.size()} nodes)" : '')
                     echo "Running ${selected.size()} test file(s) on ${params.ENVIRONMENT}" +
                          (params.RUN_IN_PARALLEL && selected.size() > 1 ? ' in parallel' : '') +

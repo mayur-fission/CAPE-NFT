@@ -14,6 +14,7 @@ attached to Allure along with the screenshots. Set
 CONCURRENT_30MIN_THRESHOLD_S to mark a slow-session limit on the charts.
 """
 import posixpath
+import time
 
 import pytest
 
@@ -54,7 +55,10 @@ SCRIPT_TIMEOUT_MS = int(env("CONCURRENT_30MIN_SCRIPT_TIMEOUT_MS", "2400000"))
 # How often each console is checked for the end of the script; a 30-minute
 # run does not need sub-second timing, and fewer checks keep the tabs light.
 POLL_INTERVAL_MS = int(env("CONCURRENT_30MIN_POLL_MS", "5000"))
-TIMINGS_LABEL = "concurrent_30min_%d_sessions_%d_browsers_U%d" % (SESSION_COUNT, BROWSER_COUNT, USER)
+# Run start time in the name: every run writes its own CSV, charts and
+# summary instead of overwriting another's
+TIMINGS_LABEL = "concurrent_30min_%d_sessions_%d_browsers_U%d_%s" % (
+    SESSION_COUNT, BROWSER_COUNT, USER, time.strftime("%Y%m%d-%H%M%S"))
 # Slow-session limit drawn on the session time charts (blank = none).
 THRESHOLD_S = float(env("CONCURRENT_30MIN_THRESHOLD_S") or 0) or None
 # Delete each session's output once it has been checked, so it does not pile
