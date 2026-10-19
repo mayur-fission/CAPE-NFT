@@ -101,6 +101,58 @@ def quit_sessions_named(page, home_url, session_names):
     return sorted(ids_by_name)
 
 
+def quit_sessions_in_batches(page, home_url, session_names, before_ids=(), batch_size=25, max_stalled=3):
+    """Quit every listed session named one of `session_names` (rows in
+    `before_ids` excepted), `batch_size` at a time, the way
+    test_delete_sessions does: load the whole session list, find the
+    sessions by name, tick one batch's checkboxes, click Quit once, wait for
+    them to go - and repeat until none are left. Batches follow the order of
+    `session_names`. Once `max_stalled` - 1 batches in a row quit nothing,
+    the next one also force-quits its leftovers one at a time; if that quits
+    nothing either, it stops.
+
+    Returns (quit_names, left_names). Never raises.
+    """
+    before_ids = set(before_ids)
+    order = {name: i for i, name in enumerate(session_names)}
+
+    def _listed():
+        goto_session_list(page, home_url, settle_ms=2000)
+        load_all_session_rows(page)
+        return {name: ids - before_ids for name, ids in session_row_ids_by_name(page, session_names).items()
+                if ids - before_ids}
+
+    quit_names, listed, stalled, batch_no = [], dict.fromkeys(session_names, set()), 0, 0
+    try:
+        listed = _listed()
+        print("\n[rstudio-local] cleanup: %d session(s) of this test listed - quitting them %d at a time"
+              % (len(listed), batch_size))
+        while listed:
+            batch_no += 1
+            force = stalled + 1 >= max_stalled
+            names = sorted(listed, key=order.get)[:batch_size]
+            print("[rstudio-local] cleanup batch %d: quitting %d of %d remaining session(s)%s: %s"
+                  % (batch_no, len(names), len(listed),
+                     " (force-quitting leftovers one at a time)" if force else "", ", ".join(names)))
+            cleanup_multiple_sessions(page, set().union(*(listed[n] for n in names)), fallback=force)
+            left = _listed()
+            gone = [n for n in names if n not in left]
+            quit_names += gone
+            print("[rstudio-local] cleanup batch %d: %d of %d quit, %d session(s) still to quit"
+                  % (batch_no, len(gone), len(names), len(left)))
+            listed = left
+            stalled = 0 if gone else stalled + 1
+            if force and not gone:
+                break
+    except Exception as exc:
+        print("[rstudio-local] cleanup: batch quit failed: %s" % exc)
+        try:
+            save_screenshot(page, "batch_quit_failed", always=True)
+        except Exception:
+            pass  # e.g. the page itself has gone
+    return quit_names, sorted(listed, key=order.get)
+
+
 def cleanup_and_verify_sessions(page, home_url, before_ids, session_names=None,
                                 name_prefixes=AUTOMATION_NAME_PREFIXES, max_rounds=4):
     """Quit the sessions this test created - new rows (not in `before_ids`)

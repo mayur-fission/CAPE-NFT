@@ -26,7 +26,7 @@ BROWSER_CLOSE_TIMEOUT_S = int(env("BROWSER_CLOSE_TIMEOUT_S", "60"))
 
 
 def run_in_parallel_browsers(browser_name, launch_args, context_args, prefixes, worker, barriers=(),
-                             stagger_s=0, join_timeout_s=None, debug_ports=None):
+                             stagger_s=0, join_timeout_s=None, debug_ports=None, on_closed=None):
     """Open one browser per prefix, each in its own thread with its own
     Playwright, `stagger_s` apart, and call worker(context, prefix) there.
     Returns [(prefix, result, error)] in prefix order.
@@ -35,6 +35,8 @@ def run_in_parallel_browsers(browser_name, launch_args, context_args, prefixes, 
     join_timeout_s: stop waiting for a frozen browser (reported as
     TimeoutError). debug_ports {prefix: port}: Chromium listens for DevTools
     there, so a stuck browser can be captured from another thread.
+    on_closed(prefix) is called in each browser's thread once its browser
+    has closed (or failed to start).
     """
     results = [None] * len(prefixes)
 
@@ -60,6 +62,9 @@ def run_in_parallel_browsers(browser_name, launch_args, context_args, prefixes, 
             results[index] = (prefix, None, exc)
             for barrier in barriers:
                 barrier.abort()
+        finally:
+            if on_closed is not None:
+                on_closed(prefix)
 
     threads = [
         threading.Thread(target=_run, args=(i, prefix), name="browser-%s" % prefix.rstrip("_"),

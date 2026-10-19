@@ -4,7 +4,8 @@ one R script in all of them, every run timed.
 Flow per browser: login -> quit leftovers with its names -> launch each in
       a tab -> setwd home -> [wait for all browsers] -> source script in all
       tabs -> wait -> check/delete outputs -> wait for all browsers ->
-      close tabs -> quit sessions
+      close tabs -> close every browser but B1 -> B1 quits all the test's
+      sessions in batches of 25 (single_browser_cleanup)
 ([...] skipped in batch mode: each browser starts as soon as it is ready.)
 """
 import os
@@ -13,7 +14,7 @@ import time
 
 from common.perf_report import attach_allure_file
 
-from common.api_ui_combo import launch_sessions_in_tabs, login_and_quit_sessions_named, quit_ui_sessions_named
+from common.api_ui_combo import launch_sessions_in_tabs, login_and_quit_sessions_named
 from common.result_printing import report_failed_runs
 from common.parallel_browsers import run_in_parallel_browsers
 from config.config import env, env_path
@@ -23,7 +24,8 @@ from common.launch_already_created_sessions import (
     close_launched_sessions,
     run_script_in_launched_sessions,
 )
-from common.session_actions import login_to_posit_workbench, set_session_working_directory
+from common.session_actions import set_session_working_directory
+from common.single_browser_cleanup import SingleBrowserCleanup
 from common.step_log import log_step
 from common.session_naming_logic import browser_name_prefixes
 from common.parallel_browsers import split_across_browsers
@@ -47,7 +49,8 @@ def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, u
     Flow per browser: login -> quit leftovers -> launch each in a tab -> setwd
           home -> [wait for all browsers] -> source script in all tabs (each in
           `output_dir`/<session>) -> wait -> check (and delete) outputs -> wait
-          for all browsers -> close tabs -> quit sessions
+          for all browsers -> close tabs -> close every browser but the first ->
+          the first quits all `session_names` in batches of 25
 
     start_together=False is batch mode: each browser starts as soon as it is
     ready (no [wait]), and one browser's failed launch does not skip the
@@ -69,6 +72,7 @@ def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, u
     debug_ports = {p: free_port() for p in prefixes} if browser_name == "chromium" else {}
     progress = BrowserProgress(prefixes, label=label, debug_ports=debug_ports)
     launch_failed = set()
+    cleanup = SingleBrowserCleanup(prefixes, user, session_names, launch_args, context_args)
     # Longest a finished browser waits for the others before cleaning up: the
     # slowest legitimate case is the last browser starting late, retrying
     # every launch and running the script to its timeout.
@@ -81,7 +85,7 @@ def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, u
             context, prefix, names_by_browser[prefix], user, "%s %s" % (label, prefix.rstrip("_")),
             ready, progress, launch_failed, attempts, launch_timeout_ms, retry_wait_s,
             script_path, output_dir, output_file_name, script_timeout_ms, delete_output, poll_interval_ms,
-            start_together, cleanup_wait_s, launch_args, context_args,
+            start_together, cleanup_wait_s, cleanup,
         )
 
     results = run_in_parallel_browsers(
@@ -89,8 +93,9 @@ def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, u
         stagger_s=stagger_s,
         # a browser frozen inside a Playwright call must not hang the test for ever
         join_timeout_s=stagger_s * browser_count + cleanup_wait_s * 2 + 900,
-        debug_ports=debug_ports,
+        debug_ports=debug_ports, on_closed=cleanup.browser_closed,
     )
+    cleanup.run_if_missed(browser_name, launch_args, context_args)
     runs, errors = [], []
     for prefix, result, error in results:
         if result is not None:
@@ -117,11 +122,12 @@ def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, u
 def _run_script_in_browser(context, prefix, session_names, user, label, ready, progress, launch_failed,
                            attempts, launch_timeout_ms, retry_wait_s, script_path, output_dir,
                            output_file_name, script_timeout_ms, delete_output=False, poll_interval_ms=500,
-                           start_together=True, cleanup_wait_s=3600, launch_args=None, context_args=None):
+                           start_together=True, cleanup_wait_s=3600, cleanup=None):
     """One browser's part of run_script_in_concurrent_sessions(); a browser
     whose launch fails adds its prefix to `launch_failed`. Each stage is
     recorded in `progress` (a BrowserProgress), which also holds the wait
-    for the other browsers before cleanup. Returns (runs, error): its run
+    for the other browsers before cleanup; `cleanup` (a
+    SingleBrowserCleanup) quits the sessions from the first browser. Returns (runs, error): its run
     records and the error that failed it, else None."""
     where = " in browser %s" % prefix.rstrip("_")
     home_url = before_ids = None
@@ -130,6 +136,8 @@ def _run_script_in_browser(context, prefix, session_names, user, label, ready, p
         try:
             progress.set(prefix, "logging in")
             home_url, before_ids = login_and_quit_sessions_named([context], user, session_names)
+            if cleanup is not None:
+                cleanup.note_login(prefix, home_url, before_ids)
             progress.set(prefix, "launching sessions")
             launched, failed = launch_sessions_in_tabs(
                 context, home_url, session_names, attempts=attempts, launch_timeout_ms=launch_timeout_ms,
@@ -193,36 +201,6 @@ def _run_script_in_browser(context, prefix, session_names, user, label, ready, p
         close_launched_sessions(launched)
         if launched:
             log_step("Closed %d session tab(s)", len(launched))
-        if home_url is not None:
-            _quit_browser_sessions(context, home_url, before_ids, session_names, user, prefix,
-                                   launch_args, context_args)
+        if cleanup is not None:
+            cleanup.run(context, prefix)
     return runs, error
-
-
-def _quit_browser_sessions(context, home_url, before_ids, session_names, user, prefix, launch_args, context_args):
-    """quit_ui_sessions_named() for one browser's sessions. If that browser
-    has died meanwhile (e.g. Chromium crashed or ran out of memory), a fresh
-    one is launched and logged in to quit them, so they are not left running
-    on the server. Errors are printed, not raised."""
-    what = "browser %s" % prefix.rstrip("_")
-    browser = context.browser
-    if browser is None or browser.is_connected():
-        quit_ui_sessions_named(context, home_url, before_ids, session_names, what)
-        return
-    log_step("Browser %s is no longer running (crashed or closed) - opening a new browser to quit its sessions",
-             prefix.rstrip("_"))
-    try:
-        fresh = browser.browser_type.launch(**(launch_args or {}))
-        try:
-            fresh_context = fresh.new_context(**{**(context_args or {}), "ignore_https_errors": True})
-            login_page = fresh_context.new_page()
-            login_to_posit_workbench(login_page, user=user)
-            login_page.close()
-            quit_ui_sessions_named(fresh_context, home_url, before_ids, session_names, what)
-        finally:
-            fresh.close()
-    except Exception as exc:
-        log_step("Could not quit the RStudio sessions created by this test from a new browser either "
-                 "(they may need deleting by hand: %s): %s", ", ".join(session_names), exc)
-
-

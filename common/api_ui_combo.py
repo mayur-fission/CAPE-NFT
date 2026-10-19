@@ -51,6 +51,7 @@ from common.session_actions import (
 )
 from common.session_cleanup import cleanup_and_verify_sessions, quit_sessions_named
 from common.session_naming_logic import prefixed_session_names
+from common.single_browser_cleanup import SingleBrowserCleanup
 from common.step_log import current_browser, log_step
 from common.parallel_browsers import run_in_parallel_browsers
 from common.result_printing import report_failed_runs
@@ -275,23 +276,28 @@ def run_group_workloads_across_browsers(browser_name, launch_args, context_args,
 
     Flow per browser: login -> launch every `group_csvs` name with its prefix
           -> wait for all browsers -> workloads -> wait for all -> close tabs
-          -> quit its sessions
+          -> close every browser but the first -> the first quits all the
+          sessions in batches of 25 (single_browser_cleanup)
 
     Returns (runs, errors).
     """
     ready = threading.Barrier(len(prefixes))
     done = threading.Barrier(len(prefixes))
     launch_failed = set()
+    cleanup = SingleBrowserCleanup(prefixes, user, prefixed_session_names(group_csvs.values(), prefixes),
+                                   launch_args, context_args)
 
     def _worker(context, prefix):
         return _run_group_workloads_in_browser(
             context, prefix, user, group_csvs, "%s %s" % (label, prefix), ready, done, launch_failed,
-            attempts, launch_timeout_ms, retry_wait_s, workload,
+            attempts, launch_timeout_ms, retry_wait_s, workload, cleanup,
         )
 
     results = run_in_parallel_browsers(
         browser_name, launch_args, context_args, prefixes, _worker, barriers=(ready, done), stagger_s=stagger_s,
+        on_closed=cleanup.browser_closed,
     )
+    cleanup.run_if_missed(browser_name, launch_args, context_args)
     runs, errors = [], []
     for prefix, result, error in results:
         if result is not None:
@@ -303,9 +309,11 @@ def run_group_workloads_across_browsers(browser_name, launch_args, context_args,
 
 
 def _run_group_workloads_in_browser(context, prefix, user, group_csvs, label, ready, done, launch_failed,
-                                    attempts, launch_timeout_ms, retry_wait_s, workload):
+                                    attempts, launch_timeout_ms, retry_wait_s, workload, cleanup=None):
     """One browser's part of run_group_workloads_across_browsers(); a
-    browser whose launch fails adds its prefix to `launch_failed`. Returns
+    browser whose launch fails adds its prefix to `launch_failed`, and
+    `cleanup` (a SingleBrowserCleanup) quits the sessions from the first
+    browser (without it, each browser quits its own). Returns
     (runs, error): its run records and the error that failed it, else None."""
     home_url = before_ids = None
     launched, runs, groups, error = [], [], {}, None
@@ -315,6 +323,8 @@ def _run_group_workloads_in_browser(context, prefix, user, group_csvs, label, re
                 [context], user, group_csvs.values(), prefixes=[prefix],
                 attempts=attempts, launch_timeout_ms=launch_timeout_ms, retry_wait_s=retry_wait_s,
             )
+            if cleanup is not None:
+                cleanup.note_login(prefix, home_url, before_ids)
             assert not failed, "sessions that failed to launch: %s" % failed
             empty = [path for path, names in names_by_csv.items() if not names]
             assert not empty, "no session names found in %s" % empty
@@ -338,7 +348,9 @@ def _run_group_workloads_in_browser(context, prefix, user, group_csvs, label, re
             pass
         # Background jobs end when their sessions are quit below.
         stop_jobs_and_close_tabs(launched)
-        if home_url is not None:
+        if cleanup is not None:
+            cleanup.run(context, prefix)
+        elif home_url is not None:
             quit_ui_created_sessions(context, home_url, before_ids, group_csvs.values(), [prefix])
     return runs, error
 
