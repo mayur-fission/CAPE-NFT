@@ -10,7 +10,15 @@ from common.rstudio_files import delete_file
 from common.rstudio_console_commands import run_console_command
 from common.rstudio_console_commands import r_string
 from common.rstudio_console_commands import get_console_output
+from common.rstudio_console_commands import wait_for_console_ready
 from common import locators
+from config.config import env
+
+# Tries of each output check; between tries the tab is reloaded. After a long
+# run with many tabs a tab's console can stop taking typed commands (e.g. it
+# lost its connection to the session), while the R session itself is fine.
+OUTPUT_CHECK_ATTEMPTS = int(env("OUTPUT_CHECK_ATTEMPTS", "3"))
+_RELOAD_TIMEOUT_MS = int(env("CONSOLE_READY_TIMEOUT_MS", "120000"))
 
 
 def check_output_file(page, record, output_path, delete=False, remove_dir=None):
@@ -25,7 +33,7 @@ def check_output_file(page, record, output_path, delete=False, remove_dir=None):
     """
     name = record["session_name"]
     try:
-        folder = get_folder_size(page, output_path)
+        folder = _read_with_reload(page, name, lambda: get_folder_size(page, output_path))
     except Exception as exc:
         record["status"] = "could not check %s: %s" % (output_path, exc)
         log_step("Output check failed in session %s: %s", name, record["status"])
@@ -42,7 +50,7 @@ def check_output_file(page, record, output_path, delete=False, remove_dir=None):
             _delete_output(page, record, output_path, delete_folder, remove_dir)
         return
     try:
-        size = get_file_size(page, output_path)
+        size = _read_with_reload(page, name, lambda: get_file_size(page, output_path))
     except Exception as exc:
         record["status"] = "could not check %s: %s" % (output_path, exc)
         log_step("Output check failed in session %s: %s", name, record["status"])
@@ -55,6 +63,28 @@ def check_output_file(page, record, output_path, delete=False, remove_dir=None):
         save_output_file(page, name, output_path, size=size)
     if delete and size is not None:
         _delete_output(page, record, output_path, delete_file, remove_dir)
+
+
+def _read_with_reload(page, session_name, read, attempts=OUTPUT_CHECK_ATTEMPTS):
+    """read() (a console read on `page`), retried up to `attempts` times;
+    before each retry the tab is reloaded - which reconnects it to the
+    session without touching R (working directory, files) - and the console
+    is waited on until R answers. Raises the last error."""
+    for attempt in range(1, attempts + 1):
+        try:
+            return read()
+        except Exception as exc:
+            if attempt == attempts:
+                raise
+            log_step("Output check in session %s did not get through (attempt %d of %d) - reloading the tab "
+                     "and trying again: %s", session_name, attempt, attempts, " ".join(str(exc).split())[:200])
+            try:
+                page.reload(wait_until="domcontentloaded", timeout=_RELOAD_TIMEOUT_MS)
+                wait_for_console_ready(page, timeout_ms=_RELOAD_TIMEOUT_MS)
+                log_step("Reloaded the tab of session %s, its console answers again", session_name)
+            except Exception as reload_exc:
+                log_step("Reloading the tab of session %s failed (trying the check anyway): %s",
+                         session_name, " ".join(str(reload_exc).split())[:200])
 
 
 def _delete_output(page, record, output_path, delete, remove_dir=None):
