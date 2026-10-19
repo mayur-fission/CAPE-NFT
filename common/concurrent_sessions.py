@@ -23,7 +23,7 @@ from common.launch_already_created_sessions import (
     close_launched_sessions,
     run_script_in_launched_sessions,
 )
-from common.session_actions import set_session_working_directory
+from common.session_actions import login_to_posit_workbench, set_session_working_directory
 from common.step_log import log_step
 from common.session_naming_logic import browser_name_prefixes
 from common.parallel_browsers import split_across_browsers
@@ -81,7 +81,7 @@ def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, u
             context, prefix, names_by_browser[prefix], user, "%s %s" % (label, prefix.rstrip("_")),
             ready, progress, launch_failed, attempts, launch_timeout_ms, retry_wait_s,
             script_path, output_dir, output_file_name, script_timeout_ms, delete_output, poll_interval_ms,
-            start_together, cleanup_wait_s,
+            start_together, cleanup_wait_s, launch_args, context_args,
         )
 
     results = run_in_parallel_browsers(
@@ -117,7 +117,7 @@ def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, u
 def _run_script_in_browser(context, prefix, session_names, user, label, ready, progress, launch_failed,
                            attempts, launch_timeout_ms, retry_wait_s, script_path, output_dir,
                            output_file_name, script_timeout_ms, delete_output=False, poll_interval_ms=500,
-                           start_together=True, cleanup_wait_s=3600):
+                           start_together=True, cleanup_wait_s=3600, launch_args=None, context_args=None):
     """One browser's part of run_script_in_concurrent_sessions(); a browser
     whose launch fails adds its prefix to `launch_failed`. Each stage is
     recorded in `progress` (a BrowserProgress), which also holds the wait
@@ -194,7 +194,35 @@ def _run_script_in_browser(context, prefix, session_names, user, label, ready, p
         if launched:
             log_step("Closed %d session tab(s)", len(launched))
         if home_url is not None:
-            quit_ui_sessions_named(context, home_url, before_ids, session_names, "browser %s" % prefix.rstrip("_"))
+            _quit_browser_sessions(context, home_url, before_ids, session_names, user, prefix,
+                                   launch_args, context_args)
     return runs, error
+
+
+def _quit_browser_sessions(context, home_url, before_ids, session_names, user, prefix, launch_args, context_args):
+    """quit_ui_sessions_named() for one browser's sessions. If that browser
+    has died meanwhile (e.g. Chromium crashed or ran out of memory), a fresh
+    one is launched and logged in to quit them, so they are not left running
+    on the server. Errors are printed, not raised."""
+    what = "browser %s" % prefix.rstrip("_")
+    browser = context.browser
+    if browser is None or browser.is_connected():
+        quit_ui_sessions_named(context, home_url, before_ids, session_names, what)
+        return
+    log_step("Browser %s is no longer running (crashed or closed) - opening a new browser to quit its sessions",
+             prefix.rstrip("_"))
+    try:
+        fresh = browser.browser_type.launch(**(launch_args or {}))
+        try:
+            fresh_context = fresh.new_context(**{**(context_args or {}), "ignore_https_errors": True})
+            login_page = fresh_context.new_page()
+            login_to_posit_workbench(login_page, user=user)
+            login_page.close()
+            quit_ui_sessions_named(fresh_context, home_url, before_ids, session_names, what)
+        finally:
+            fresh.close()
+    except Exception as exc:
+        log_step("Could not quit the RStudio sessions created by this test from a new browser either "
+                 "(they may need deleting by hand: %s): %s", ", ".join(session_names), exc)
 
 

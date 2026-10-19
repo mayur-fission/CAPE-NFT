@@ -17,12 +17,25 @@ from types import SimpleNamespace
 
 from common.perf_report import attach_allure_file
 
-from config.config import env
+from config.config import current_test_file, env
 
 BAR, MIN_C, MAX_C, FAIL_C, AVG_C = "#9bb4d8", "#2e8b57", "#e67e22", "#c0392b", "#222222"
 # Statuses of a successful session (lower case); blank also counts as ok.
 OK_STATUSES = ("ok", "pass", "passed", "success", "successful", "completed", "done", "true")
 REPORT_TZ = env("SESSION_REPORT_TZ", "Asia/Kolkata")
+
+
+def _running_test_file():
+    """test_concurrent_sessions.py while that test runs, "" outside pytest."""
+    name = current_test_file()
+    return name + ".py" if name else ""
+
+
+def script_line(test_file, script):
+    """'Script name: <test file>   |   Path: <R script path>' (either part
+    left out when blank)."""
+    parts = [f"Script name: {test_file}" if test_file else "", f"Path: {script}" if script else ""]
+    return "   |   ".join(p for p in parts if p)
 
 
 def _plot_libs():
@@ -200,10 +213,12 @@ def build_session_chart(df, out, title, o, sort="session", tz=REPORT_TZ):
     # header: title + test details + test run time stamps (when available)
     sub = []
     det = [f"{k}: {v}" for k, v in (("Test", o.test_name), ("Environment", o.environment),
-                                    ("Browser", o.browser), ("Script", getattr(o, "script", "")),
-                                    ("Notes", o.notes)) if v]
+                                    ("Browser", o.browser), ("Notes", o.notes)) if v]
     if det:
         sub.append("   |   ".join(det))
+    script_info = script_line(getattr(o, "test_file", ""), getattr(o, "script", ""))
+    if script_info:
+        sub.append(script_info)
     if df["start"].notna().any():  # time stamps from the data, shown as recorded
         t0 = df["start"].min()
         t1 = df["end"].max() if df["end"].notna().any() else df["start"].max()
@@ -264,7 +279,7 @@ def build_session_chart(df, out, title, o, sort="session", tz=REPORT_TZ):
                 **({"above_threshold": over_thr} if thr is not None else {}))
 
 
-def build_timeline_chart(df, out, title, tz=REPORT_TZ, script=""):
+def build_timeline_chart(df, out, title, tz=REPORT_TZ, script="", test_file=""):
     """Chart 2: one horizontal bar per session, from its start to its end
     time, so the overlap (concurrency) between sessions is visible. Every
     session gets a row: a failed one is drawn in red with "FAIL - <status>"
@@ -341,11 +356,12 @@ def build_timeline_chart(df, out, title, tz=REPORT_TZ, script=""):
 
     n_failed = sum(1 for f in failed if f)
     # the script on its own line above the numbers (a full path would overflow it)
-    info = (f"Script: {script}\n" if script else "") + (f"Sessions: {n}" + (f" ({n_failed} failed)" if n_failed else "") +
+    script_info = script_line(test_file, script)
+    info = (f"{script_info}\n" if script_info else "") + (f"Sessions: {n}" + (f" ({n_failed} failed)" if n_failed else "") +
             f"   |   Peak running at the same time: {peak}   |   "
             f"Start spread (first to last start): {start_spread:.2f} seconds   |   "
             f"Total test duration: {total:.2f} seconds")
-    ax.set_title(f"{title}: start to end timeline", loc="left", fontweight="bold", pad=22 + (13 if script else 0))
+    ax.set_title(f"{title}: start to end timeline", loc="left", fontweight="bold", pad=22 + (13 if script_info else 0))
     ax.text(0, 1.008, info, transform=ax.transAxes, ha="left", va="bottom",
             fontsize=9, color="#555")
     # legend a fixed ~0.9 inch below the axes, under the x-axis label, whatever the chart height
@@ -388,8 +404,8 @@ def build_histogram_chart(df, out, title, o, tz=REPORT_TZ):
     ax.set_ylabel("Number of sessions")
     ax.set_title(f"{title}: distribution of time taken", loc="left", fontweight="bold")
     ax.legend(loc="upper right", fontsize=9, frameon=False)
-    script = getattr(o, "script", "")
-    ax.text(0.01, 0.97, (f"Script: {script}\n" if script else "") +
+    script_info = script_line(getattr(o, "test_file", ""), getattr(o, "script", ""))
+    ax.text(0.01, 0.97, (f"{script_info}\n" if script_info else "") +
             f"Sessions: {len(df)}  (successful: {len(ok)}, failed: {int(df['failed'].sum())})\n"
             f"Minimum {vmin:.2f} seconds (green)   Maximum {vmax:.2f} seconds (orange)\n"
             f"Each bar = sessions whose time falls in a {w:.2f}-second range",
@@ -405,12 +421,14 @@ def build_histogram_chart(df, out, title, o, tz=REPORT_TZ):
 
 def generate_session_time_report(timings_path, title="Time taken per concurrent session", threshold=None,
                                  test_name="", environment="", browser="", notes="", sort="session",
-                                 tz=REPORT_TZ, attach=True, script=""):
+                                 tz=REPORT_TZ, attach=True, script="", test_file=None):
     """Build the session, histogram and timeline charts from `timings_path`
     as <timings_path without extension>.png / _histogram.png / _timeline.png
     and attach them to Allure (when `attach`). `script` (the R script the
-    sessions ran) is shown in the header of all three. Returns the stats dict (plus
-    "charts": the PNG paths), or None if the report could not be made.
+    sessions ran) is shown as "Path" in the header of all three, next to
+    "Script name": `test_file`, by default the running test's file. Returns
+    the stats dict (plus "charts": the PNG paths), or None if the report
+    could not be made.
     Never raises.
     """
     if not timings_path or not os.path.exists(timings_path):
@@ -422,7 +440,8 @@ def generate_session_time_report(timings_path, title="Time taken per concurrent 
         print("\n[rstudio-local] session time report skipped (%s); pip install pandas numpy matplotlib" % exc)
         return None
     o = SimpleNamespace(threshold=threshold, test_name=test_name, environment=environment,
-                        browser=browser, notes=notes, script=script)
+                        browser=browser, notes=notes, script=script,
+                        test_file=_running_test_file() if test_file is None else test_file)
     base = os.path.splitext(timings_path)[0]
     charts = []
     result = None
@@ -432,7 +451,8 @@ def generate_session_time_report(timings_path, title="Time taken per concurrent 
         charts.append(base + ".png")
         build_histogram_chart(df, base + "_histogram.png", title, o, tz=tz)
         charts.append(base + "_histogram.png")
-        timeline = build_timeline_chart(df, base + "_timeline.png", title, tz=tz, script=script)
+        timeline = build_timeline_chart(df, base + "_timeline.png", title, tz=tz, script=script,
+                                        test_file=o.test_file)
         if timeline:
             result.update(timeline)
             charts.append(base + "_timeline.png")
@@ -461,10 +481,12 @@ def main():
     p.add_argument("--environment", default="", help="e.g. staging / prod, shown in the header")
     p.add_argument("--browser", default="", help="e.g. Chrome 130, shown in the header")
     p.add_argument("--notes", default="", help="free text, shown in the header")
-    p.add_argument("--script", default="", help="the R script the sessions ran, shown on every chart")
+    p.add_argument("--script", default="", help="path of the R script the sessions ran, shown on every chart")
+    p.add_argument("--test-file", default="", help="test file that ran it (Script name), shown on every chart")
     a = p.parse_args()
     r = generate_session_time_report(a.input, a.title, a.threshold, a.test_name, a.environment, a.browser,
-                                     a.notes, a.sort, a.tz, attach=False, script=a.script)
+                                     a.notes, a.sort, a.tz, attach=False, script=a.script,
+                                     test_file=a.test_file)
     if r is None:
         raise SystemExit(1)
     for k, v in r.items():

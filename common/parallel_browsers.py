@@ -16,6 +16,13 @@ import os
 from config.config import evidence_dir
 from common.perf_report import write_json_report
 import math
+import signal
+import subprocess
+
+# Longest browser.close() may take before the browser process is killed: a
+# frozen Chromium never answers the close, and closing its window by hand
+# does not end the process, so the test would wait for ever.
+BROWSER_CLOSE_TIMEOUT_S = int(env("BROWSER_CLOSE_TIMEOUT_S", "60"))
 
 
 def run_in_parallel_browsers(browser_name, launch_args, context_args, prefixes, worker, barriers=(),
@@ -46,7 +53,7 @@ def run_in_parallel_browsers(browser_name, launch_args, context_args, prefixes, 
                     context = browser.new_context(**{**context_args, "ignore_https_errors": True})
                     results[index] = (prefix, worker(context, prefix), None)
                 finally:
-                    browser.close()
+                    close_browser(browser, prefix, (debug_ports or {}).get(prefix))
                     log_step("Browser %s closed", prefix.rstrip("_"))
         except BaseException as exc:
             print("\n[rstudio-local] browser %s failed: %s" % (prefix, exc))
@@ -101,6 +108,52 @@ DEFAULT_TABS_PER_BROWSER = 5
 # How long a browser may stay in one stage, while other browsers are already
 # done, before its tabs are captured as possibly stuck (screenshots + URLs).
 STUCK_CAPTURE_S = int(env("CONCURRENT_STUCK_CAPTURE_S", "600"))
+
+
+def close_browser(browser, prefix, debug_port=None, timeout_s=BROWSER_CLOSE_TIMEOUT_S):
+    """browser.close(), killing the browser process (found by its DevTools
+    `debug_port`) if it has not closed within `timeout_s` - which makes the
+    close return. Without a port (not Chromium) it is a plain close."""
+    timer = None
+    if debug_port:
+        def _kill():
+            log_step("Browser %s did not close within %ds (frozen?) - killing its process",
+                     prefix.rstrip("_"), timeout_s)
+            try:
+                kill_browser_on_port(debug_port)
+            except Exception as exc:
+                log_step("Could not kill browser %s: %s", prefix.rstrip("_"), exc)
+
+        timer = threading.Timer(timeout_s, _kill)
+        timer.daemon = True
+        timer.start()
+    try:
+        browser.close()
+    finally:
+        if timer is not None:
+            timer.cancel()
+
+
+def kill_browser_on_port(port):
+    """Kill the Chromium started with --remote-debugging-port=<port>; its
+    tab processes exit with it. On Linux the process is found in /proc (no
+    pkill needed, e.g. in the Jenkins container)."""
+    flag = "--remote-debugging-port=%d" % port
+    if os.name == "nt":
+        command = ["powershell", "-NoProfile", "-Command",
+                   "Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and "
+                   "$_.CommandLine -match '%s(\\s|$)' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"
+                   % flag]
+        subprocess.run(command, capture_output=True, timeout=60)
+        return
+    for pid in filter(str.isdigit, os.listdir("/proc")):
+        try:
+            with open("/proc/%s/cmdline" % pid, "rb") as f:
+                args = f.read().decode(errors="replace").split("\0")
+            if flag in args:
+                os.kill(int(pid), signal.SIGKILL)
+        except (OSError, ValueError):
+            pass  # gone meanwhile, or not ours to read
 
 
 def free_port():
@@ -191,8 +244,9 @@ class BrowserProgress:
     report_every_s, which browsers it is still waiting for and what they are
     doing, and captures (capture_stuck_browser()) any that has stayed in one
     stage for STUCK_CAPTURE_S - and every one still not done when the wait
-    gives up. Captured files are collected in `captured` for the caller to
-    attach to Allure from the test's own thread."""
+    gives up, after which those are killed (kill()). Captured files are
+    collected in `captured` for the caller to attach to Allure from the
+    test's own thread."""
 
     def __init__(self, prefixes, label="", debug_ports=None, report_every_s=60):
         self._cond = threading.Condition()
@@ -278,7 +332,28 @@ class BrowserProgress:
                 self.capture(slow)   # outside the lock: a capture takes up to a couple of minutes
         if reporter:
             self.capture(pending)
+            self.kill(pending)
         return False
+
+    def kill(self, prefixes):
+        """Kill each of `prefixes` that is still not done and has a DevTools
+        port (kill_browser_on_port()): its stuck Playwright call then fails,
+        so its thread goes on to clean up (quitting its sessions from a new
+        browser) instead of hanging the test until the join timeout."""
+        for prefix in prefixes:
+            with self._cond:
+                if prefix in self._done:
+                    continue
+                stage = self._stage[prefix][0]
+            if prefix not in self._ports:
+                log_step("Browser %s is still stuck (%s) and has no DevTools port - cannot kill it",
+                         prefix.rstrip("_"), stage)
+                continue
+            log_step("Killing stuck browser %s (%s) so its thread can clean up", prefix.rstrip("_"), stage)
+            try:
+                kill_browser_on_port(self._ports[prefix])
+            except Exception as exc:
+                log_step("Could not kill browser %s: %s", prefix.rstrip("_"), exc)
 
 
 def browsers_for(session_count, browser_count=None, tabs_per_browser=DEFAULT_TABS_PER_BROWSER):
