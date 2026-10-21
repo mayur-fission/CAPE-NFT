@@ -73,6 +73,10 @@ TEST_FILES = [
     'test_concurrent_sessions_10min_u1'                 :
         'Same as test_concurrent_sessions_10min (same CONCURRENT_10MIN settings), with sessions named ' +
         'U1_CONCURRENT_10MIN_SESSION_<N> so both can run at once as the same user',
+    'test_concurrent_sessions_10min_s'                  :
+        'CONCURRENT_SMALL_10MIN_SESSIONS UI-created sessions run the small ~10 minute R script (pmx_10kb_10min.R, ' +
+        'R_SCRIPT_SMALL_10MIN in .env) at once, each in its own folder, timed, with charts; all six output files ' +
+        '(data/, tables/, logs/) must be written. Skipped while R_SCRIPT_SMALL_10MIN is not set',
     'test_concurrent_sessions_30min'                    :
         'CONCURRENT_30MIN_SESSIONS UI-created sessions run the ~30 minute R script (htp_30min.R) at once, timed, ' +
         'with charts',
@@ -211,6 +215,10 @@ jobParams << string(name: 'CONCURRENT_10MIN_SESSIONS', defaultValue: '1',
     description: '[Concurrent session tests] test_concurrent_sessions_10min: sessions that all source the ~10 minute R script ' +
                  '(htp_10min.R) at the same moment, each timed (limit 15 min). One browser per 5 sessions. Whole number, ' +
                  'at least 1. Default: 1')
+jobParams << string(name: 'CONCURRENT_SMALL_10MIN_SESSIONS', defaultValue: '1',
+    description: '[Concurrent session tests] test_concurrent_sessions_10min_s: sessions that all source the small ~10 ' +
+                 'minute R script (pmx_10kb_10min.R) at the same moment, each timed (limit 15 min). One browser per 5 ' +
+                 'sessions. Whole number, at least 1. Default: 1')
 jobParams << string(name: 'CONCURRENT_30MIN_SESSIONS', defaultValue: '1',
     description: '[Concurrent session tests] test_concurrent_sessions_30min: sessions that all source the ~30 minute R script ' +
                  '(htp_30min.R) at the same moment, each timed (limit 40 min). One browser per 5 sessions. Whole number, ' +
@@ -218,7 +226,7 @@ jobParams << string(name: 'CONCURRENT_30MIN_SESSIONS', defaultValue: '1',
 jobParams << string(name: 'SESSION_TIME_THRESHOLD_S', defaultValue: '',
     description: '[Concurrent session tests] Slow-session limit in seconds (decimals allowed, e.g. 650): drawn as a line on ' +
                  'the session time charts, with a count of the sessions above it. It only marks the charts and does not ' +
-                 'fail the test. Blank (default) = no line. Used by: test_concurrent_sessions, _10min, _30min')
+                 'fail the test. Blank (default) = no line. Used by: test_concurrent_sessions, _10min, _10min_s, _30min')
 // --- Other tests ---
 jobParams << string(name: 'HIGH_THROUGHPUT_DURATION_S', defaultValue: '',
     description: '[Other tests] test_167 / test_168: seconds each high-throughput script run may take before it counts as ' +
@@ -516,8 +524,10 @@ pipeline {
                         error("SESSION_TIME_THRESHOLD_S must be blank or a number of seconds, got '${params.SESSION_TIME_THRESHOLD_S}'")
                     }
                     def atLeastOne = ['UI_BROWSERS', 'SESSION_COUNT', 'CONCURRENT_SESSIONS', 'CONCURRENT_10MIN_SESSIONS', 'CONCURRENT_30MIN_SESSIONS',
+                                      'CONCURRENT_SMALL_10MIN_SESSIONS',
                                       'HTP_REPEAT_RUNS']
                     ['UI_BROWSERS', 'SESSION_COUNT', 'CONCURRENT_SESSIONS', 'CONCURRENT_10MIN_SESSIONS', 'CONCURRENT_30MIN_SESSIONS',
+                     'CONCURRENT_SMALL_10MIN_SESSIONS',
                      'HTP_REPEAT_RUNS', 'HTP_REPEAT_WAIT_S',
                      'UI_BROWSER_STAGGER_S', 'PARALLEL_LOGIN_GAP_S', 'GROUP_TEST_DURATION_S',
                      'ACTIVE_SESSIONS_MONITOR_S', 'NODE_START_OFFSET_S'].each { name ->
@@ -574,9 +584,11 @@ pipeline {
                     "CONCURRENT_SESSIONS_BROWSER_STAGGER_S=${params.UI_BROWSER_STAGGER_S.trim()}",
                     "CONCURRENT_10MIN_SESSIONS=${(params.CONCURRENT_10MIN_SESSIONS ?: '1').trim()}",
                     "CONCURRENT_30MIN_SESSIONS=${(params.CONCURRENT_30MIN_SESSIONS ?: '1').trim()}",
+                    "CONCURRENT_SMALL_10MIN_SESSIONS=${(params.CONCURRENT_SMALL_10MIN_SESSIONS ?: '1').trim()}",
                     "CONCURRENT_SESSIONS_THRESHOLD_S=${(params.SESSION_TIME_THRESHOLD_S ?: '').trim()}",
                     "CONCURRENT_10MIN_THRESHOLD_S=${(params.SESSION_TIME_THRESHOLD_S ?: '').trim()}",
                     "CONCURRENT_30MIN_THRESHOLD_S=${(params.SESSION_TIME_THRESHOLD_S ?: '').trim()}",
+                    "CONCURRENT_SMALL_10MIN_THRESHOLD_S=${(params.SESSION_TIME_THRESHOLD_S ?: '').trim()}",
                     "HTP_REPEAT_RUNS=${(params.HTP_REPEAT_RUNS ?: '3').trim()}",
                     "HTP_REPEAT_WAIT_S=${(params.HTP_REPEAT_WAIT_S ?: '30').trim()}",
                 ]) {

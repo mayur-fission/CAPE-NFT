@@ -155,6 +155,23 @@ def get_file_size(page, path, timeout_ms=10000):
     return None if value == "NA" else int(value)
 
 
+def get_file_sizes(page, paths, timeout_ms=15000):
+    """{path: size in bytes, or None if it is missing (or a folder)} for each
+    of `paths`, read with a single console command."""
+    paths = list(paths)
+    value = read_console_value(
+        page,
+        "paste(vapply(c(%s), function(p) if (file.exists(p) && !dir.exists(p)) "
+        "format(file.size(p), scientific=FALSE) else 'NA', ''), collapse=' ')"
+        % ", ".join(r_string(p) for p in paths),
+        timeout_ms,
+    )
+    sizes = value.split()
+    if len(sizes) != len(paths):
+        raise RuntimeError("expected %d file sizes, the console printed %r" % (len(paths), value))
+    return {path: None if size == "NA" else int(size) for path, size in zip(paths, sizes)}
+
+
 def get_folder_size(page, path, timeout_ms=30000):
     """(file count, total bytes) of the files under the folder `path`
     (recursive), or None if `path` is not a folder."""

@@ -62,6 +62,7 @@ Server paths have no defaults in the code: every folder, R script and
 | `R_SCRIPT_GROUP_B_WORKBENCH_JOB`, `R_SCRIPT_GROUP_B_BACKGROUND_JOB` | Group B jobs in the group tests |
 | `R_SCRIPT_CONCURRENT_SESSIONS` / `OUTPUT_DIR_CONCURRENT_SESSIONS` | test_concurrent_sessions (optional; default to the CSV ones) |
 | `R_SCRIPT_CONCURRENT_10MIN`, `R_SCRIPT_CONCURRENT_30MIN` | The 10- and 30-minute concurrent tests |
+| `R_SCRIPT_SMALL_10MIN` | `test_concurrent_sessions_10min_s` (`pmx_10kb_10min.R`; the test is skipped when it is not set) |
 | `R_SOURCE_COMMAND_NEW_SESSIONS`, `R_SOURCE_COMMAND_EXISTING_SESSIONS` | `source(...)` commands of the perf tests |
 
 The older names (e.g. `HIGH_THROUGHPUT_JOB_SCRIPT`, `CSV_SESSIONS_SCRIPT`)
