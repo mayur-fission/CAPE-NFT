@@ -212,14 +212,28 @@ def _format_timestamp(epoch_s):
     return datetime.fromtimestamp(epoch_s).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
 
+# Figures a script's run summary can add to a record (see
+# common.script_outputs.parse_run_summary()), with their CSV column. The
+# headers avoid the words load_session_times() looks columns up by.
+RUN_SUMMARY_COLUMNS = (
+    ("replicates", "Replicates"),
+    ("subjects_per_replicate", "Subjects per Replicate"),
+    ("script_runtime_s", "Script Runtime (s)"),
+    ("stop_reason", "Stop Reason"),
+)
+
+
 def write_script_timings_csv(path, script_runs):
     """One row per record, ordered by start time: session name, start/end
     time, time taken (s) and status. End time and time taken are blank for
     runs that errored or timed out. Does nothing if there are no records.
+    Run summary figures (RUN_SUMMARY_COLUMNS) follow as extra columns when
+    any record has them.
     """
     if not script_runs:
         return
-    rows = [["Session Name", "Start Time", "End Time", "Time Taken (s)", "Status"]]
+    extra = [(key, header) for key, header in RUN_SUMMARY_COLUMNS if any(key in r for r in script_runs)]
+    rows = [["Session Name", "Start Time", "End Time", "Time Taken (s)", "Status"] + [h for _, h in extra]]
     for run in sorted(script_runs, key=lambda r: r["started"] or 0):
         ended = run.get("ended")
         rows.append([
@@ -228,6 +242,6 @@ def write_script_timings_csv(path, script_runs):
             _format_timestamp(ended),
             "%.2f" % (ended - run["started"]) if ended is not None else "",
             run.get("status") or "not run",
-        ])
+        ] + ["" if run.get(key) is None else run[key] for key, _ in extra])
     write_csv_report(path, rows)
     print("[rstudio-local] wrote script timings to %s" % path)

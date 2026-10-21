@@ -251,9 +251,14 @@ class BrowserProgress:
     stage for STUCK_CAPTURE_S - and every one still not done when the wait
     gives up, after which those are killed (kill()). Captured files are
     collected in `captured` for the caller to attach to Allure from the
-    test's own thread."""
+    test's own thread.
 
-    def __init__(self, prefixes, label="", debug_ports=None, report_every_s=60):
+    stage_limits {stage: seconds}: stages that legitimately take longer
+    (e.g. a 10-minute script) count as stuck only after that long, so a
+    browser that is simply still running is not captured;
+    CONCURRENT_STUCK_CAPTURE_S still applies when it is the larger."""
+
+    def __init__(self, prefixes, label="", debug_ports=None, report_every_s=60, stage_limits=None):
         self._cond = threading.Condition()
         self._stage = {p: ("starting", time.time()) for p in prefixes}
         self._done = set()
@@ -263,7 +268,12 @@ class BrowserProgress:
         self._label = label
         self._ports = debug_ports or {}
         self._captured_stage = {}   # prefix -> the stage it was captured in
+        self._stage_limits = dict(stage_limits or {})
         self.captured = []          # evidence files written by the captures
+
+    def stuck_after(self, stage):
+        """Seconds a browser may stay in `stage` before it counts as stuck."""
+        return max(STUCK_CAPTURE_S, self._stage_limits.get(stage, 0))
 
     def set(self, prefix, stage):
         with self._cond:
@@ -325,8 +335,8 @@ class BrowserProgress:
                 self._cond.wait(min(self._report_every_s, left))
                 reporter = prefix == self._reporter
                 now = time.time()
-                slow = [p for p, (_, since) in self._stage.items()
-                        if p not in self._done and now - since >= STUCK_CAPTURE_S]
+                slow = [p for p, (stage, since) in self._stage.items()
+                        if p not in self._done and now - since >= self.stuck_after(stage)]
                 report = (reporter and len(self._done) < len(self._stage)
                           and now - last_report >= self._report_every_s)
                 if report:

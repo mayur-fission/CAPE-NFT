@@ -3,8 +3,10 @@ save a copy), then delete it; or report it after a timeout. A script that
 writes several files gives their paths as a list (check_output_files()).
 """
 import posixpath
+import re
 
 from common.rstudio_console_commands import get_folder_size
+from common.rstudio_console_commands import read_text_file
 from common.step_log import log_step
 from common.rstudio_files import delete_folder
 from common.rstudio_console_commands import get_file_size
@@ -103,6 +105,51 @@ def check_output_files(page, record, output_paths, delete=False, remove_dir=None
     # A failed check keeps whatever the script did write, to look into
     if delete and not missing:
         _delete_outputs(page, record, output_paths, remove_dir)
+
+
+def parse_run_summary(text):
+    """The figures in a script's run summary (the pmx scripts' run_summary.txt):
+
+        Finished because:  <reason>
+        Runtime:           600.3 s (10.01 min)
+        Replicates:        2718 x 200 subjects
+
+    Returns {"replicates", "subjects_per_replicate", "script_runtime_s",
+    "stop_reason"}, each only when its line is there."""
+    figures = {}
+    m = re.search(r"Replicates:\s*(\d+)\s*x\s*(\d+)", text)
+    if m:
+        figures["replicates"], figures["subjects_per_replicate"] = int(m.group(1)), int(m.group(2))
+    m = re.search(r"Runtime:\s*([\d.]+)\s*s\b", text)
+    if m:
+        figures["script_runtime_s"] = float(m.group(1))
+    m = re.search(r"Finished because:[ \t]*(.+)", text)
+    if m:
+        figures["stop_reason"] = m.group(1).strip()
+    return figures
+
+
+def read_run_summary(page, record, summary_path):
+    """Read the script's run summary file `summary_path` (relative to the
+    session's working directory) and add its figures (parse_run_summary())
+    to the run record, for the timings CSV, summary and charts. Call it
+    before the output is deleted. Never fails the run: a summary that cannot
+    be read or has no figures is only logged."""
+    name = record["session_name"]
+    try:
+        text = _read_with_reload(page, name, lambda: read_text_file(page, summary_path))
+    except Exception as exc:
+        log_step("WARNING: could not read the run summary %s in session %s: %s", summary_path, name,
+                 " ".join(str(exc).split())[:200])
+        return
+    figures = parse_run_summary(text) if text is not None else {}
+    if not figures:
+        log_step("WARNING: no run summary figures in %s in session %s (%s)", summary_path, name,
+                 "file not found" if text is None else "unexpected format")
+        return
+    record.update(figures)
+    log_step("Run summary of session %s: %s", name,
+             ", ".join("%s %s" % (k.replace("_", " "), v) for k, v in figures.items()))
 
 
 def _output_folders(output_paths):

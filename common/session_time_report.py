@@ -5,6 +5,8 @@ to the CSV and attached to Allure:
                         threshold, stats box)
   <name>_histogram.png  sessions per time range
   <name>_timeline.png   start-to-end bar per session
+  <name>_replicates.png replicates each session completed - only when the
+                        CSV has a Replicates column (scripts with a run summary)
 
 Also a command line tool: python -m common.session_time_report <csv> ...
 """
@@ -419,12 +421,78 @@ def build_histogram_chart(df, out, title, o, tz=REPORT_TZ):
     plt.close(fig)
 
 
+def build_replicates_chart(timings_path, out, title, o, tz=REPORT_TZ):
+    """Chart 4: replicates each session completed, from the "Replicates"
+    column the timings CSV has when the script writes a run summary (see
+    common.script_timings RUN_SUMMARY_COLUMNS). A fixed-duration script
+    always takes about the same time, so this - not the time - shows how
+    much work each session got done. Returns its stats, or None (no chart)
+    when there is no such column or value."""
+    np, plt, pd, Patch = _plot_libs()
+    raw = pd.read_csv(timings_path)
+    if "Replicates" not in raw.columns or "Session Name" not in raw.columns:
+        return None
+    df = pd.DataFrame({"session": raw["Session Name"],
+                       "replicates": pd.to_numeric(raw["Replicates"], errors="coerce")}).dropna()
+    if df.empty:
+        return None
+    key = df["session"].map(lambda s: int(short_label(s)) if short_label(s).isdigit() else 10**9)
+    df = df.assign(_k=key).sort_values("_k", kind="stable").reset_index(drop=True)
+    labels = [short_label(s) for s in df["session"]]
+    reps = df["replicates"].astype(float).tolist()
+    n = len(reps)
+    vmin, vmax, mean = min(reps), max(reps), float(np.mean(reps))
+    colors = [MAX_C if v == vmax else MIN_C if v == vmin else BAR for v in reps]
+
+    # y-range tight around the data (as on the time chart): the differences
+    # between sessions are a few percent, invisible on an axis from 0
+    span = (vmax - vmin) or max(vmax * 0.05, 1)
+    ylo = max(0, vmin - span * 0.6)
+    yhi = vmax + span * 0.6
+
+    width = min(max(9, 0.24 * n + 3), 60)
+    fig, ax = plt.subplots(figsize=(width, 6.8), dpi=150)
+    ax.bar(range(n), [v - ylo for v in reps], bottom=ylo, color=colors, width=0.8 if n > 40 else 0.75)
+    lab_fs = 8 if n <= 30 else 7 if n <= 60 else 6 if n <= 120 else 5
+    pad = (yhi - ylo) * 0.01
+    for xi, v, c in zip(range(n), reps, colors):
+        ax.text(xi, v - pad, f"{v:.0f}", rotation=90, ha="center", va="top", fontsize=lab_fs,
+                color="white" if c != BAR else "#1b2a41")
+    ax.axhline(mean, color=AVG_C, ls="--", lw=1.4)
+    ax.text(-0.6, mean + pad, f"Average: {mean:.1f} replicates", color=AVG_C, fontsize=10, fontweight="bold",
+            va="bottom", bbox=dict(facecolor="white", edgecolor="none", alpha=0.85, pad=1.5))
+    ax.set_ylim(ylo, yhi)
+    ax.set_xlim(-0.8, n - 0.2)
+    ax.set_xticks(range(n))
+    ax.set_xticklabels(labels, rotation=0 if n <= 30 else 90, fontsize=lab_fs + 1)
+    ax.set_xlabel("Concurrent session (Sessions opened in separate browser tab)")
+    ax.set_ylabel("Replicates completed" + (f"  (axis starts at {ylo:.0f})" if ylo > 0 else ""))
+    ax.set_title(f"{title}: replicates completed per session", loc="left", fontweight="bold", pad=22)
+    script_info = script_line(getattr(o, "test_file", ""), getattr(o, "script", ""))
+    ax.text(0, 1.008, (f"{script_info}   |   " if script_info else "") +
+            f"Sessions: {n}   |   Total: {sum(reps):.0f}   |   Min {vmin:.0f} (green)   "
+            f"Max {vmax:.0f} (orange)   |   Spread: {100.0 * (vmax - vmin) / vmax:.1f}% of max",
+            transform=ax.transAxes, ha="left", va="bottom", fontsize=9, color="#555")
+    ax.legend(handles=[Patch(color=MIN_C, label="Fewest replicates"), Patch(color=MAX_C, label="Most replicates"),
+                       Patch(color=BAR, label="Other sessions")], loc="upper right", fontsize=8, frameon=False)
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+    ax.grid(axis="y", alpha=0.3)
+    fig.text(0.01, 0.005, f"Generated: {_now_stamp(tz)}", fontsize=8, color="#666")
+    plt.tight_layout(rect=(0, 0.025, 1, 1))
+    fig.savefig(out)
+    plt.close(fig)
+    return {"replicates_min": vmin, "replicates_avg": round(mean, 1), "replicates_max": vmax,
+            "replicates_total": sum(reps)}
+
+
 def generate_session_time_report(timings_path, title="Time taken per concurrent session", threshold=None,
                                  test_name="", environment="", browser="", notes="", sort="session",
                                  tz=REPORT_TZ, attach=True, script="", test_file=None):
     """Build the session, histogram and timeline charts from `timings_path`
     as <timings_path without extension>.png / _histogram.png / _timeline.png
-    and attach them to Allure (when `attach`). `script` (the R script the
+    (plus _replicates.png when the CSV has a Replicates column) and attach
+    them to Allure (when `attach`). `script` (the R script the
     sessions ran) is shown as "Path" in the header of all three, next to
     "Script name": `test_file`, by default the running test's file. Returns
     the stats dict (plus "charts": the PNG paths), or None if the report
@@ -456,6 +524,10 @@ def generate_session_time_report(timings_path, title="Time taken per concurrent 
         if timeline:
             result.update(timeline)
             charts.append(base + "_timeline.png")
+        replicates = build_replicates_chart(timings_path, base + "_replicates.png", title, o, tz=tz)
+        if replicates:
+            result.update(replicates)
+            charts.append(base + "_replicates.png")
     except Exception as exc:
         print("\n[rstudio-local] could not build the session time report from %s: %s" % (timings_path, exc))
     for path in charts:

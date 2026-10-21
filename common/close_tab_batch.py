@@ -22,6 +22,9 @@ from common.step_log import log_step
 from common.session_naming_logic import browser_name_prefixes
 from common.single_browser_cleanup import SingleBrowserCleanup
 
+# The stage that lasts the whole test duration (BrowserProgress stage_limits)
+WATCH_STAGE = "watching the sessions with their tabs closed"
+
 
 def run_close_tab_batch(browser_name, launch_args, context_args, user, session_names, browser_count, label,
                         script_path, duration_s, monitor_interval_s, stop_before_cleanup=True, stagger_s=0,
@@ -43,7 +46,9 @@ def run_close_tab_batch(browser_name, launch_args, context_args, user, session_n
         print("\n[rstudio-local] browser %s: %d session(s) - %s" % (prefix.rstrip("_"), len(names), ", ".join(names)))
 
     debug_ports = {p: free_port() for p in prefixes} if browser_name == "chromium" else {}
-    progress = BrowserProgress(prefixes, label=label, debug_ports=debug_ports)
+    # Watching for the full duration is not being stuck
+    progress = BrowserProgress(prefixes, label=label, debug_ports=debug_ports,
+                               stage_limits={WATCH_STAGE: duration_s + 300})
     cleanup = SingleBrowserCleanup(prefixes, user, session_names, launch_args, context_args)
     # Longest a finished browser waits for the others: the last one starting
     # late, retrying every launch and then watching for the full duration.
@@ -130,7 +135,7 @@ def _close_tab_batch_in_browser(context, prefix, session_names, user, label, scr
         close_launched_sessions(launched)
         log_step("Closed the tabs of %d session(s) - their scripts keep running on the server", len(launched))
         launched_pages_closed = True
-        progress.set(prefix, "watching the sessions with their tabs closed")
+        progress.set(prefix, WATCH_STAGE)
         home_page = context.new_page()
         try:
             drops = monitor_sessions(home_page, home_url, started, duration_s, monitor_interval_s,

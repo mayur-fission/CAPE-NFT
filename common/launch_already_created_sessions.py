@@ -11,7 +11,7 @@ from collections import namedtuple
 from config.config import env
 from common.rstudio_console_commands import get_console_output, r_source_command, wait_for_console_ready
 from common.rstudio_session_helper import is_session_alive, open_existing_session
-from common.script_outputs import check_output_file
+from common.script_outputs import check_output_file, read_run_summary
 from common.script_timings import new_run_record, submit_in_each, wait_for_console_runs
 from common.session_actions import close_all_editor_files, recreate_session_folder, set_session_working_directory
 from common.step_log import log_step
@@ -81,28 +81,75 @@ def launch_already_created_sessions(context, home_url, session_names=None, timeo
     ]
 
 
+def prepare_session_folders(launched, working_dir=None, per_session_dir=False):
+    """The per-session setup of run_script_in_launched_sessions(), on its own
+    so a caller can do it before the scripts start (e.g. before waiting for
+    other browsers) and then start them all within seconds: in each session
+    that opened, setwd to `working_dir` (default RSTUDIO_WORKING_DIR; skipped
+    if neither is set), or with per_session_dir to its own
+    `working_dir`/<session name> folder (emptied first: data left there by an
+    earlier run is deleted, see recreate_session_folder()), with
+    SETWD_ATTEMPTS tries.
+
+    Returns {session name: (session folder or None, error or None)} for the
+    sessions that opened; pass it to run_script_in_launched_sessions(prepared=...).
+    """
+    if per_session_dir and not working_dir:
+        raise ValueError("per_session_dir needs a working_dir")
+    prepared = {}
+    for session in launched:
+        if session.error:
+            continue
+        session_dir = posixpath.join(working_dir, session.session_name) if per_session_dir else None
+        for attempt in range(1, SETWD_ATTEMPTS + 1):
+            try:
+                if session_dir:
+                    recreate_session_folder(session.page, working_dir, session.session_name)
+                if set_session_working_directory(session.page, path=session_dir or working_dir):
+                    log_step("Working directory set to %s in session %s%s", session_dir or working_dir,
+                             session.session_name, " (the script's output goes here)" if session_dir else "")
+                prepared[session.session_name] = (session_dir, None)
+                break
+            except Exception as exc:
+                # A tab that is busy (many tabs open) can miss one console read; try again
+                if attempt < SETWD_ATTEMPTS:
+                    log_step("Could not set the working directory in session %s (attempt %d of %d), "
+                             "retrying in %ds: %s", session.session_name, attempt, SETWD_ATTEMPTS,
+                             SETWD_RETRY_WAIT_S, exc)
+                    session.page.wait_for_timeout(SETWD_RETRY_WAIT_S * 1000)
+                    continue
+                prepared[session.session_name] = (session_dir, exc)
+                log_step("Could not set the working directory in session %s: %s", session.session_name, exc)
+    return prepared
+
+
 def run_script_in_launched_sessions(launched, script_path, working_dir=None, timeout_ms=1800000,
                                     poll_interval_ms=500, output_path=None, per_session_dir=False,
-                                    delete_output=False, on_poll=None):
+                                    delete_output=False, on_poll=None, prepared=None, summary_file=None):
     """In each session from launch_already_created_sessions(), setwd to
     `working_dir` (default RSTUDIO_WORKING_DIR; skipped if neither is set),
     or with per_session_dir to its own `working_dir`/<session name> folder
     (emptied first: data left there by an earlier run is deleted, see
     recreate_session_folder()). Then source `script_path` in every console and
-    wait for all runs together, so the scripts run concurrently.
+    wait for all runs together, so the scripts run concurrently. With
+    `prepared` (from prepare_session_folders(), same arguments) that setup
+    was done already and the scripts are started straight away.
 
     With `output_path` (relative paths resolve against the working
     directory), a run only counts as "ok" if that file exists once the
     script has finished; with delete_output it is then deleted (and the
     per-session folder too, if left empty). on_poll, if given, is called
     once per polling round so callers can drive other sessions meanwhile;
-    keep it quick. Tabs are left open.
+    keep it quick. Tabs are left open. With `summary_file` (the script's run
+    summary, e.g. "pmx_10kb_output/logs/run_summary.txt") its figures -
+    replicates, runtime, why it stopped - are added to each finished run's
+    record first (read_run_summary()), before the output is deleted.
 
     Returns one run record per session (see common.script_timings); sessions
     that failed to open are recorded as such.
     """
-    if per_session_dir and not working_dir:
-        raise ValueError("per_session_dir needs a working_dir")
+    if prepared is None:
+        prepared = prepare_session_folders(launched, working_dir, per_session_dir)
     source_command = r_source_command(script_path)
     what = "R script %s" % posixpath.basename(script_path)
     runs, ready = [], []
@@ -113,28 +160,15 @@ def run_script_in_launched_sessions(launched, script_path, working_dir=None, tim
         if session.error:
             record["status"] = "open failed: %s" % session.error
             continue
-        session_dir = posixpath.join(working_dir, session.session_name) if per_session_dir else None
-        for attempt in range(1, SETWD_ATTEMPTS + 1):
-            try:
-                if session_dir:
-                    recreate_session_folder(session.page, working_dir, session.session_name)
-                if set_session_working_directory(session.page, path=session_dir or working_dir):
-                    log_step("Working directory set to %s in session %s%s", session_dir or working_dir,
-                             session.session_name, " (the script's output goes here)" if session_dir else "")
-                ready.append((session.page, record, session_dir))
-                break
-            except Exception as exc:
-                # A tab that is busy (many tabs open) can miss one console read; try again
-                if attempt < SETWD_ATTEMPTS:
-                    log_step("Could not set the working directory in session %s (attempt %d of %d), "
-                             "retrying in %ds: %s", session.session_name, attempt, SETWD_ATTEMPTS,
-                             SETWD_RETRY_WAIT_S, exc)
-                    session.page.wait_for_timeout(SETWD_RETRY_WAIT_S * 1000)
-                    continue
-                record["status"] = "setwd failed: %s" % exc
-                log_step("Could not set the working directory in session %s: %s", session.session_name, exc)
+        session_dir, error = prepared.get(session.session_name, (None, "its working directory was not set"))
+        if error is not None:
+            record["status"] = "setwd failed: %s" % error
+            continue
+        ready.append((session.page, record, session_dir))
 
     def _on_done(page, record, session_dir):
+        if summary_file:
+            read_run_summary(page, record, summary_file)
         if output_path:
             check_output_file(page, record, output_path, delete=delete_output, remove_dir=session_dir)
 

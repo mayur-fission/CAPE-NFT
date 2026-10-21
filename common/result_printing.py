@@ -119,6 +119,19 @@ def summarize_concurrent_runs(runs, label, session_count, browser_count):
         % (label, summary["ok"], summary["runs"], browser_count, summary["wall_clock_s"],
            summary["min_s"], summary["avg_s"], summary["max_s"])
     )
+    # Work each session got done, from the script's run summary (when it has one)
+    replicates = [r["replicates"] for r in runs if r.get("replicates") is not None]
+    if replicates:
+        summary.update({
+            "replicates_sessions": len(replicates),
+            "replicates_total": sum(replicates),
+            "replicates_min": min(replicates),
+            "replicates_avg": round(sum(replicates) / float(len(replicates)), 1),
+            "replicates_max": max(replicates),
+        })
+        print("[rstudio-local] %s: replicates per session (from %d run summaries) min %d / avg %.1f / max %d, "
+              "total %d" % (label, len(replicates), summary["replicates_min"], summary["replicates_avg"],
+                            summary["replicates_max"], summary["replicates_total"]))
     path = os.path.join(evidence_dir(), "rstudio_concurrent_summary_%s.json" % label)
     write_json_report(path, summary)
     attach_allure_file(path)

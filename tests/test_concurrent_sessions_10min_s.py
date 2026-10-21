@@ -13,7 +13,9 @@ OUTPUT_FILES are in there afterwards: data/nm_dataset.csv (the ~10 KB
 NONMEM-style dataset), tables/exposure_summary.csv and logs/run_log.txt,
 model_spec.txt, session_info.txt and run_summary.txt. pmx_10kb_output/ is
 then deleted (CONCURRENT_SMALL_10MIN_DELETE_OUTPUT=false keeps it); a failed
-check keeps it, to look into.
+check keeps it, to look into. Before that, each session's
+logs/run_summary.txt is read: its replicate count, runtime and stop reason
+go into the timings CSV, the summary JSON and a replicates-per-session chart.
 
 Per-session timings go to evidence/rstudio_script_timings_<TIMINGS_LABEL>.csv
 and the overall time (first start to last finish, min/avg/max) to
@@ -64,6 +66,11 @@ OUTPUT_FILES = env_list("CONCURRENT_SMALL_10MIN_OUTPUT_FILES", [
         "logs/run_summary.txt",
     )
 ])
+# The script's run summary: its replicate count, runtime and stop reason go
+# into the timings CSV, the summary JSON and a replicates chart, since a
+# fixed-duration script always takes ~10 minutes and the replicates show how
+# much work it got done. CONCURRENT_SMALL_10MIN_RUN_SUMMARY overrides ("" = off).
+RUN_SUMMARY_FILE = env("CONCURRENT_SMALL_10MIN_RUN_SUMMARY", "%s/logs/run_summary.txt" % SCRIPT_OUTPUT_FOLDER)
 # The script runs for ~10 minutes; leave headroom on top.
 SCRIPT_TIMEOUT_MS = int(env("CONCURRENT_SMALL_10MIN_SCRIPT_TIMEOUT_MS", "900000"))
 # How often each console is checked for the end of the script.
@@ -98,6 +105,7 @@ def test_concurrent_sessions_run_small_10min_r_script(
         TIMINGS_LABEL, SCRIPT_PATH, OUTPUT_DIR, OUTPUT_FILES, SCRIPT_TIMEOUT_MS,
         stagger_s=BROWSER_STAGGER_S, attempts=LAUNCH_ATTEMPTS, launch_timeout_ms=LAUNCH_TIMEOUT_MS,
         retry_wait_s=LAUNCH_RETRY_WAIT_S, delete_output=DELETE_OUTPUT, poll_interval_ms=POLL_INTERVAL_MS,
+        summary_file=RUN_SUMMARY_FILE or None,
     )
     timings_csv = script_timings_csv_path(TIMINGS_LABEL)
     write_script_timings_csv(timings_csv, runs)
