@@ -22,6 +22,14 @@ pip install -r requirements.txt
 playwright install chromium
 ```
 
+For the Allure report a local run builds at the end (optional - without it
+the run only saves the Allure results), install Java 8+ and the Allure
+command line 2.27 or newer (2.42.0 tested), e.g. on Windows
+`scoop install allure`. `allure --version` must work in the shell the tests
+run from, or set `ALLURE_CMD` to its path. The report goes to
+`evidence/runs/<run start>_allure/allure-report.html`; `LOCAL_ALLURE_REPORT=0`
+turns it off. Jenkins builds its own report and needs neither.
+
 Create `.env` in the repo root (it is git-ignored and loaded automatically, in
 any shell). At minimum:
 
@@ -103,7 +111,11 @@ Everything a run produces goes to `evidence/` (git-ignored):
   time taken, status
 - `rstudio_*_aggregate_report.csv` / `*_launch_perf.json` - JMeter-style
   launch statistics
-- `allure-results/` when run with `--alluredir=evidence/allure-results`
+- `allure-results/` when run with `--alluredir=evidence/allure-results`;
+  without `--alluredir` (local runs), `runs/<run start>_allure/` with the
+  results and a one-file `allure-report.html` built at the end
+- `runs/<run start>_<test file>/step_log.txt` (every step, written live) and
+  `test_output.txt` (everything each test printed)
 - screenshots (also attached to Allure): failures only by default;
   `EVIDENCE_SCREENSHOTS=1` takes one at every step (Jenkins: SCREENSHOT_ALL_STEPS)
 - `output_<session>_<file>` - copies of the files the sessions wrote, only with

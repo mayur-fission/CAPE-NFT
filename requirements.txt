@@ -24,6 +24,9 @@ openpyxl==3.1.5
 # --- Reports -------------------------------------------------------------------
 # Allure steps and attachments (common/perf_report.py)
 allure-pytest==2.13.5
+# The HTML report a local run builds at the end (conftest.py) also needs the
+# Allure command line 2.27+ (2.42.0 tested; Jenkins downloads 2.34.0) and Java
+# 8+. They are not pip packages - see README, Setup.
 # Session time charts (common/session_time_report.py; optional - skipped
 # without them); tzdata gives Windows the IANA timezones
 pandas==2.3.3
