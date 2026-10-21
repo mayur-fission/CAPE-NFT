@@ -76,7 +76,7 @@ TEST_FILES = [
     'test_concurrent_sessions_10min_s'                  :
         'CONCURRENT_SMALL_10MIN_SESSIONS UI-created sessions run the small ~10 minute R script (pmx_10kb_10min.R, ' +
         'R_SCRIPT_SMALL_10MIN in .env) at once, each in its own folder, timed, with charts; all six output files ' +
-        '(data/, tables/, logs/) must be written. Skipped while R_SCRIPT_SMALL_10MIN is not set',
+        '(pmx_10kb_output/: data/, tables/, logs/) must be written. Skipped while R_SCRIPT_SMALL_10MIN is not set',
     'test_concurrent_sessions_30min'                    :
         'CONCURRENT_30MIN_SESSIONS UI-created sessions run the ~30 minute R script (htp_30min.R) at once, timed, ' +
         'with charts',

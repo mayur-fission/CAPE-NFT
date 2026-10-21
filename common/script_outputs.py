@@ -77,10 +77,11 @@ def check_output_files(page, record, output_paths, delete=False, remove_dir=None
     """check_output_file() for a script that writes several files: every one
     of `output_paths` must exist (checked with one console command), else
     record["status"] names the missing ones. The files are copied to
-    evidence/ like a single output (save_output_file()). With `delete`, the
-    files are then deleted, together with the folders they are in when those
-    are relative paths ("logs/run_log.txt" removes logs/ with anything else
-    the script wrote there), and `remove_dir` if that leaves it empty.
+    evidence/ like a single output (save_output_file()). With `delete` and
+    all of them there, the files are then deleted, together with the folders
+    they are in when those are relative paths ("logs/run_log.txt" removes
+    logs/ with anything else the script wrote there), and `remove_dir` if
+    that leaves it empty. A failed check deletes nothing.
     """
     name = record["session_name"]
     try:
@@ -99,7 +100,8 @@ def check_output_files(page, record, output_paths, delete=False, remove_dir=None
     for path in output_paths:
         if sizes[path] is not None:
             save_output_file(page, name, path, size=sizes[path])
-    if delete:
+    # A failed check keeps whatever the script did write, to look into
+    if delete and not missing:
         _delete_outputs(page, record, output_paths, remove_dir)
 
 

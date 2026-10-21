@@ -8,11 +8,12 @@ sessions, SCRIPT_PATH is sourced in all of them at the same time and each run
 is timed (timeout CONCURRENT_SMALL_10MIN_SCRIPT_TIMEOUT_MS, default 15 min).
 
 Each session runs the script in its own folder, <output dir>/<session name>/,
-and a run only counts as ok if all of OUTPUT_FILES are there afterwards:
-data/nm_dataset.csv (the ~10 KB NONMEM-style dataset),
-tables/exposure_summary.csv and logs/run_log.txt, model_spec.txt,
-session_info.txt and run_summary.txt. They are then deleted with their
-folders (CONCURRENT_SMALL_10MIN_DELETE_OUTPUT=false keeps them).
+where it writes pmx_10kb_output/; a run only counts as ok if all of
+OUTPUT_FILES are in there afterwards: data/nm_dataset.csv (the ~10 KB
+NONMEM-style dataset), tables/exposure_summary.csv and logs/run_log.txt,
+model_spec.txt, session_info.txt and run_summary.txt. pmx_10kb_output/ is
+then deleted (CONCURRENT_SMALL_10MIN_DELETE_OUTPUT=false keeps it); a failed
+check keeps it, to look into.
 
 Per-session timings go to evidence/rstudio_script_timings_<TIMINGS_LABEL>.csv
 and the overall time (first start to last finish, min/avg/max) to
@@ -49,15 +50,19 @@ LAUNCH_RETRY_WAIT_S = int(env("CONCURRENT_SESSIONS_LAUNCH_RETRY_WAIT_S", "15"))
 SCRIPT_PATH = env("R_SCRIPT_SMALL_10MIN")
 OUTPUT_DIR = env_path("OUTPUT_DIR_CONCURRENT_SESSIONS", "CONCURRENT_SESSIONS_OUTPUT_DIR",
                       "OUTPUT_DIR_GENERATE_CSV", "CSV_SESSIONS_OUTPUT_DIR")
-# Files the script writes under its session folder; all must exist for a run
-# to count as ok. CONCURRENT_SMALL_10MIN_OUTPUT_FILES (comma-separated) overrides.
+# Files the script writes in pmx_10kb_output/ under its session folder; all
+# must exist for a run to count as ok. CONCURRENT_SMALL_10MIN_OUTPUT_FILES
+# (comma-separated, relative to the session folder) overrides.
+SCRIPT_OUTPUT_FOLDER = "pmx_10kb_output"
 OUTPUT_FILES = env_list("CONCURRENT_SMALL_10MIN_OUTPUT_FILES", [
-    "data/nm_dataset.csv",
-    "tables/exposure_summary.csv",
-    "logs/run_log.txt",
-    "logs/model_spec.txt",
-    "logs/session_info.txt",
-    "logs/run_summary.txt",
+    "%s/%s" % (SCRIPT_OUTPUT_FOLDER, path) for path in (
+        "data/nm_dataset.csv",
+        "tables/exposure_summary.csv",
+        "logs/run_log.txt",
+        "logs/model_spec.txt",
+        "logs/session_info.txt",
+        "logs/run_summary.txt",
+    )
 ])
 # The script runs for ~10 minutes; leave headroom on top.
 SCRIPT_TIMEOUT_MS = int(env("CONCURRENT_SMALL_10MIN_SCRIPT_TIMEOUT_MS", "900000"))
