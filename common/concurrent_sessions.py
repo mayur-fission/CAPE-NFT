@@ -39,6 +39,13 @@ from common.parallel_browsers import BrowserProgress
 SESSION_HOME_DIR = env_path("WORKBENCH_HOME_DIR", "CONCURRENT_SESSIONS_HOME_DIR")
 # The stage that lasts as long as the script (BrowserProgress stage_limits)
 SCRIPT_STAGE = "running the R script / checking outputs"
+# Seconds over which the browsers start their scripts once all are ready,
+# evenly (B1 at once, the last one after this long); 0 = all at the same
+# moment. Spreading them eases the load peaks - on the machine running the
+# browsers and on the server - of every tab starting, and later checking its
+# output, at once.
+START_SPREAD_S = float(env("CONCURRENT_START_SPREAD_S") or 0)
+SPREAD_STAGE = "waiting for its turn to start (CONCURRENT_START_SPREAD_S)"
 # Time on top of the script timeout for the output checks (a check that does
 # not get through reloads the tab and tries again) before a browser counts as stuck
 OUTPUT_CHECK_SLACK_S = 300
@@ -83,7 +90,13 @@ def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, u
     # A browser still running its script is not stuck: only after the script
     # timeout (plus time for the output checks) is it captured as one
     progress = BrowserProgress(prefixes, label=label, debug_ports=debug_ports, stage_limits={
-        SCRIPT_STAGE: script_timeout_ms / 1000.0 + OUTPUT_CHECK_SLACK_S})
+        SCRIPT_STAGE: script_timeout_ms / 1000.0 + OUTPUT_CHECK_SLACK_S, SPREAD_STAGE: START_SPREAD_S + 60})
+    # Each browser's wait before starting its scripts (CONCURRENT_START_SPREAD_S)
+    spread = START_SPREAD_S if start_together and browser_count > 1 else 0
+    start_delays = {p: spread * i / (browser_count - 1) if spread else 0 for i, p in enumerate(prefixes)}
+    if spread:
+        log_step("Starting the scripts over %.0fs (CONCURRENT_START_SPREAD_S): one browser every %.1fs",
+                 spread, spread / (browser_count - 1))
     launch_failed = set()
     cleanup = SingleBrowserCleanup(prefixes, user, session_names, launch_args, context_args)
     # Longest a finished browser waits for the others before cleaning up: the
@@ -91,14 +104,14 @@ def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, u
     # every launch and running the script to its timeout.
     cleanup_wait_s = int(env("CONCURRENT_CLEANUP_WAIT_S") or (
         script_timeout_ms / 1000.0 + attempts * (launch_timeout_ms / 1000.0 + retry_wait_s)
-        + stagger_s * browser_count + 300))
+        + stagger_s * browser_count + spread + 300))
 
     def _worker(context, prefix):
         return _run_script_in_browser(
             context, prefix, names_by_browser[prefix], user, "%s %s" % (label, prefix.rstrip("_")),
             ready, progress, launch_failed, attempts, launch_timeout_ms, retry_wait_s,
             script_path, output_dir, output_file_name, script_timeout_ms, delete_output, poll_interval_ms,
-            start_together, cleanup_wait_s, cleanup, summary_file,
+            start_together, cleanup_wait_s, cleanup, summary_file, start_delays[prefix],
         )
 
     results = run_in_parallel_browsers(
@@ -135,7 +148,8 @@ def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, u
 def _run_script_in_browser(context, prefix, session_names, user, label, ready, progress, launch_failed,
                            attempts, launch_timeout_ms, retry_wait_s, script_path, output_dir,
                            output_file_name, script_timeout_ms, delete_output=False, poll_interval_ms=500,
-                           start_together=True, cleanup_wait_s=3600, cleanup=None, summary_file=None):
+                           start_together=True, cleanup_wait_s=3600, cleanup=None, summary_file=None,
+                           start_delay_s=0):
     """One browser's part of run_script_in_concurrent_sessions(); a browser
     whose launch fails adds its prefix to `launch_failed`. Each stage is
     recorded in `progress` (a BrowserProgress), which also holds the wait
@@ -198,6 +212,10 @@ def _run_script_in_browser(context, prefix, session_names, user, label, ready, p
                                      % sorted(p.rstrip("_") for p in launch_failed))
             log_step("All browsers are ready - starting the R script %s in every session",
                      os.path.basename(script_path))
+            if start_delay_s:
+                progress.set(prefix, SPREAD_STAGE)
+                log_step("Starting this browser's scripts in %.1fs (CONCURRENT_START_SPREAD_S)", start_delay_s)
+                time.sleep(start_delay_s)
         else:
             log_step("All %d session(s) of this browser are ready - starting the R script %s in them now",
                      len(launched), os.path.basename(script_path))
