@@ -51,13 +51,21 @@ SPREAD_STAGE = "waiting for its turn to start (CONCURRENT_START_SPREAD_S)"
 OUTPUT_CHECK_SLACK_S = 300
 
 
+def script_names(script_path):
+    """The file name of `script_path`, or the names of a {session: path}
+    map's scripts, comma-separated."""
+    paths = script_path.values() if isinstance(script_path, dict) else [script_path]
+    return ", ".join(dict.fromkeys(os.path.basename(p) for p in paths))
+
+
 def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, user, session_names,
                                       browser_count, label, script_path, output_dir, output_file_name,
                                       script_timeout_ms, stagger_s=0, attempts=3, launch_timeout_ms=180000,
                                       retry_wait_s=15, delete_output=False, poll_interval_ms=500,
                                       start_together=True, summary_file=None):
     """Run `script_path` in `session_names` spread over `browser_count`
-    browsers (started `stagger_s` apart), each run timed.
+    browsers (started `stagger_s` apart), each run timed. `script_path` can
+    also be {session name: script path}, a script of its own per session.
 
     Flow per browser: login -> quit leftovers -> launch each in a tab -> setwd
           home -> empty `output_dir`/<session> folder, setwd there -> [wait for
@@ -75,7 +83,7 @@ def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, u
     Returns (runs, errors): run records, "browser <B>: <error>" per failure.
     """
     log_step("Starting %s: R script %s in %d session(s) over %d browser(s), as user %d",
-             label, os.path.basename(script_path), len(session_names), browser_count, user)
+             label, script_names(script_path), len(session_names), browser_count, user)
     prefixes = browser_name_prefixes(browser_count)
     names_by_browser = dict(zip(prefixes, split_across_browsers(session_names, browser_count)))
     for prefix, names in names_by_browser.items():
@@ -211,14 +219,14 @@ def _run_script_in_browser(context, prefix, session_names, user, label, ready, p
                 raise AssertionError("scripts skipped: launch failed in browser(s) %s"
                                      % sorted(p.rstrip("_") for p in launch_failed))
             log_step("All browsers are ready - starting the R script %s in every session",
-                     os.path.basename(script_path))
+                     script_names(script_path))
             if start_delay_s:
                 progress.set(prefix, SPREAD_STAGE)
                 log_step("Starting this browser's scripts in %.1fs (CONCURRENT_START_SPREAD_S)", start_delay_s)
                 time.sleep(start_delay_s)
         else:
             log_step("All %d session(s) of this browser are ready - starting the R script %s in them now",
-                     len(launched), os.path.basename(script_path))
+                     len(launched), script_names(script_path))
         progress.set(prefix, SCRIPT_STAGE)
         started = time.time()
         runs += run_script_in_launched_sessions(

@@ -77,6 +77,30 @@ TEST_FILES = [
         'CONCURRENT_SMALL_10MIN_SESSIONS UI-created sessions run the small ~10 minute R script (pmx_10kb_10min.R, ' +
         'R_SCRIPT_SMALL_10MIN in .env) at once, each in its own folder, timed, with charts; all six output files ' +
         '(pmx_10kb_output/: data/, tables/, logs/) must be written. Skipped while R_SCRIPT_SMALL_10MIN is not set',
+    'test_mgsolve_10min'                                :
+        'MGSOLVE_10MIN_SESSIONS (default 1) UI-created sessions run the mrgsolve R script (mrgsolve_sim.R, ' +
+        'MGSOLVE_SCRIPT in .env) at once, each in its own folder, timed, with charts. Skipped while MGSOLVE_SCRIPT ' +
+        'is not set',
+    'test_pknca_10min'                                  :
+        'PKNCA_10MIN_SESSIONS (default 1) UI-created sessions run the PKNCA R script (pknca_nca_10min.R, ' +
+        'PKNCA_SCRIPT in .env) at once, each in its own folder, timed, with charts. Skipped while PKNCA_SCRIPT ' +
+        'is not set',
+    'test_nlmixr_10min'                                 :
+        'NLMIXR_10MIN_SESSIONS (default 1) UI-created sessions run the nlmixr2 R script (nlmixr2_sse_10min.R, ' +
+        'NLMIXR_SCRIPT in .env) at once, each in its own folder, timed, with charts. Skipped while NLMIXR_SCRIPT ' +
+        'is not set',
+    'test_shiny_html_10min'                             :
+        'SHINY_HTML_10MIN_SESSIONS (default 1) UI-created sessions run the Shiny HTML report R script ' +
+        '(test_html_reports_shiny.R, SHINY_HTML_SCRIPT in .env) at once, each in its own folder, timed, with charts. ' +
+        'Skipped while SHINY_HTML_SCRIPT is not set',
+    'test_tidyverse_ggplot_10min'                       :
+        'TIDYVERSE_GGPLOT_10MIN_SESSIONS (default 1) UI-created sessions run the tidyverse + ggplot2 R script ' +
+        '(tidyverse_ggplot2_10min.R, TINYVERSE_GGPLOT_SCRIPT in .env) at once, each in its own folder, timed, with ' +
+        'charts. Skipped while TINYVERSE_GGPLOT_SCRIPT is not set',
+    'test_pmt_10min'                                    :
+        'PMT_10MIN_SESSIONS (default 10, a multiple of 5) UI-created sessions over the five 10-minute scripts ' +
+        '(mrgsolve, nlmixr2, PKNCA, pmx_10kb_10min, tidyverse): one browser per 5 sessions, one tab per script, all ' +
+        'started at once, timed, with charts. Missing R packages are installed first',
     'test_concurrent_sessions_30min'                    :
         'CONCURRENT_30MIN_SESSIONS UI-created sessions run the ~30 minute R script (htp_30min.R) at once, timed, ' +
         'with charts',

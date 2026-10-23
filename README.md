@@ -63,6 +63,12 @@ Server paths have no defaults in the code: every folder, R script and
 | `R_SCRIPT_CONCURRENT_SESSIONS` / `OUTPUT_DIR_CONCURRENT_SESSIONS` | test_concurrent_sessions (optional; default to the CSV ones) |
 | `R_SCRIPT_CONCURRENT_10MIN`, `R_SCRIPT_CONCURRENT_30MIN` | The 10- and 30-minute concurrent tests |
 | `R_SCRIPT_SMALL_10MIN` | `test_concurrent_sessions_10min_s` (`pmx_10kb_10min.R`; the test is skipped when it is not set) |
+| `MGSOLVE_SCRIPT` | `test_mgsolve_10min` (`mrgsolve_sim.R`; the test is skipped when it is not set) |
+| `PKNCA_SCRIPT` | `test_pknca_10min` (`pknca_nca_10min.R`; the test is skipped when it is not set) |
+| `NLMIXR_SCRIPT` | `test_nlmixr_10min` (`nlmixr2_sse_10min.R`; the test is skipped when it is not set) |
+| `SHINY_HTML_SCRIPT` | `test_shiny_html_10min` (`test_html_reports_shiny.R`; the test is skipped when it is not set) |
+| `TINYVERSE_GGPLOT_SCRIPT` | `test_tidyverse_ggplot_10min` (`tidyverse_ggplot2_10min.R`; the test is skipped when it is not set) |
+| `PMT_10MIN_SESSIONS` | `test_pmt_10min`: sessions over the mrgsolve, nlmixr2, PKNCA, tidyverse and `R_SCRIPT_SMALL_10MIN` scripts (multiple of 5; one browser per 5, one tab per script). Missing R packages are installed first (`common/r_packages.py`) |
 | `R_SOURCE_COMMAND_NEW_SESSIONS`, `R_SOURCE_COMMAND_EXISTING_SESSIONS` | `source(...)` commands of the perf tests |
 
 The older names (e.g. `HIGH_THROUGHPUT_JOB_SCRIPT`, `CSV_SESSIONS_SCRIPT`)

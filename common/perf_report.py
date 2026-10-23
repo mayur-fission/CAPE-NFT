@@ -124,7 +124,8 @@ def write_json_report(path, stats):
 def write_csv_report(path, rows):
     """Write `rows` to the CSV `path` and attach it to the Allure report."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", newline="") as fh:
+    # utf-8, as the reports read it back: R error messages have curly quotes
+    with open(path, "w", newline="", encoding="utf-8") as fh:
         csv.writer(fh).writerows(rows)
     attach_allure_file(path)
 

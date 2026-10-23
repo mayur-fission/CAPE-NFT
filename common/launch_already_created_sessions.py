@@ -134,6 +134,8 @@ def run_script_in_launched_sessions(launched, script_path, working_dir=None, tim
     wait for all runs together, so the scripts run concurrently. With
     `prepared` (from prepare_session_folders(), same arguments) that setup
     was done already and the scripts are started straight away.
+    `script_path` can also be {session name: script path}, a script of its
+    own per session.
 
     With `output_path` (relative paths resolve against the working
     directory), a run only counts as "ok" if that file exists once the
@@ -150,8 +152,8 @@ def run_script_in_launched_sessions(launched, script_path, working_dir=None, tim
     """
     if prepared is None:
         prepared = prepare_session_folders(launched, working_dir, per_session_dir)
-    source_command = r_source_command(script_path)
-    what = "R script %s" % posixpath.basename(script_path)
+    scripts = script_path if isinstance(script_path, dict) else None
+    what = "R script" if scripts else "R script %s" % posixpath.basename(script_path)
     runs, ready = [], []
 
     for session in launched:
@@ -172,8 +174,15 @@ def run_script_in_launched_sessions(launched, script_path, working_dir=None, tim
         if output_path:
             check_output_file(page, record, output_path, delete=delete_output, remove_dir=session_dir)
 
+    if scripts:
+        pending = []
+        for path in dict.fromkeys(scripts[record["session_name"]] for _, record, _ in ready):
+            pending += submit_in_each([r for r in ready if scripts[r[1]["session_name"]] == path],
+                                      r_source_command(path), what="R script %s" % posixpath.basename(path))
+    else:
+        pending = submit_in_each(ready, r_source_command(script_path), what=what)
     wait_for_console_runs(
-        submit_in_each(ready, source_command, what=what), timeout_ms, poll_interval_ms, on_done=_on_done,
+        pending, timeout_ms, poll_interval_ms, on_done=_on_done,
         on_timeout=lambda page, record, _: report_console_timeout(page, record["session_name"]), on_poll=on_poll,
         what=what,
     )
