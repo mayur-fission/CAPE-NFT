@@ -18,16 +18,24 @@ from config.config import env
 # A package install (with its dependencies) can take a while, more so when
 # the repository has no binaries and they are compiled.
 INSTALL_TIMEOUT_MS = int(env("R_PACKAGES_INSTALL_TIMEOUT_MS", "3600000"))
-# Repository to install from when R has none set (getOption("repos") is
-# "@CRAN@", which would open RStudio's mirror chooser).
-FALLBACK_REPO = env("R_PACKAGES_REPO", "https://cloud.r-project.org")
+# Repository to install from. The default is a dated CRAN snapshot from before
+# R 4.5 came out: the server runs R 4.4, and current CRAN versions of some
+# packages (e.g. Deriv, which nlmixr2 needs) require R >= 4.5. Set it blank to
+# use the session's own repository (getOption("repos")) instead.
+R_PACKAGES_REPO = env("R_PACKAGES_REPO", "https://packagemanager.posit.co/cran/2025-03-31")
+# Repository to install from when R_PACKAGES_REPO is blank and R has none set
+# (getOption("repos") is "@CRAN@", which would open RStudio's mirror chooser).
+FALLBACK_REPO = "https://cloud.r-project.org"
 SETUP_LAUNCH_TIMEOUT_MS = int(env("CONCURRENT_SESSIONS_LAUNCH_TIMEOUT_MS", "180000"))
 
 # The R packages each 10-minute workload script needs (test_<name>_10min and
 # test_pmt_10min); each test's <NAME>_R_PACKAGES setting overrides its list.
 MGSOLVE_PACKAGES = ["mrgsolve"]
 PKNCA_PACKAGES = ["PKNCA", "tidyr"]
-NLMIXR_PACKAGES = ["nlmixr2", "rxode2"]
+# The whole nlmixr2 family: they call each other's internals, so all must come
+# from the same release (an older nlmixr2est under a newer nlmixr2 fails every
+# fit with "'.nlmixr2objectNameAssign' is not an exported object")
+NLMIXR_PACKAGES = ["lotri", "rxode2", "nlmixr2data", "nlmixr2est", "nlmixr2extra", "nlmixr2plot", "nlmixr2"]
 SHINY_HTML_PACKAGES = ["rmarkdown", "knitr", "shiny", "callr", "httpuv"]
 TIDYVERSE_GGPLOT_PACKAGES = ["tidyverse"]
 
@@ -42,11 +50,19 @@ def _r_vector(packages):
 
 def missing_r_packages(page, packages):
     """The ones of `packages` not installed in any library of the session
-    on `page`."""
-    value = read_console_value(
-        page, "paste(Filter(function(p) !nzchar(system.file(package=p)), %s), collapse=',')" % _r_vector(packages),
-        timeout_ms=30000,
-    )
+    on `page` - or, with R_PACKAGES_REPO set, installed in a version other
+    than that repository's (install.packages() keeps a dependency that is
+    already there, however old, so a mixed set would otherwise stay mixed)."""
+    if R_PACKAGES_REPO:
+        # (available.packages() downloads the repository's package index)
+        expr = ("(function(ap) Filter(function(p) !nzchar(system.file(package=p)) || "
+                "isTRUE(as.character(packageVersion(p)) != ap[match(p, rownames(ap)), 'Version']), %s))"
+                "(available.packages(repos=%s))" % (_r_vector(packages), r_string(R_PACKAGES_REPO)))
+        timeout_ms = 120000
+    else:
+        expr = "Filter(function(p) !nzchar(system.file(package=p)), %s)" % _r_vector(packages)
+        timeout_ms = 30000
+    value = read_console_value(page, "paste(%s, collapse=',')" % expr, timeout_ms=timeout_ms)
     return [p for p in value.split(",") if p]
 
 
@@ -58,16 +74,20 @@ def ensure_r_packages(page, packages, timeout_ms=INSTALL_TIMEOUT_MS):
     if not missing:
         log_step("R packages already installed: %s", ", ".join(packages))
         return []
-    log_step("R packages not installed: %s - installing them (with their dependencies)", ", ".join(missing))
+    log_step("R packages missing or not the repository's version: %s - installing them (with their dependencies) from %s",
+             ", ".join(missing), R_PACKAGES_REPO or "the session's repository")
+    if R_PACKAGES_REPO:
+        repos = "repos <- %s; " % r_string(R_PACKAGES_REPO)
+    else:
+        repos = "repos <- getOption('repos'); if (any(repos == '@CRAN@')) repos <- %s; " % r_string(FALLBACK_REPO)
     # Timed here, not by run_console_command(): its clock starts only once
     # the console has taken the command, which can be well after it is typed
     started = time.time()
     run_console_command(
         page,
         "lib <- %s; dir.create(lib, recursive=TRUE, showWarnings=FALSE); .libPaths(c(lib, .libPaths())); "
-        "repos <- getOption('repos'); if (any(repos == '@CRAN@')) repos <- %s; "
-        "install.packages(%s, lib=lib, repos=repos, Ncpus=max(1L, parallel::detectCores() - 1L))"
-        % (_LIB, r_string(FALLBACK_REPO), _r_vector(missing)),
+        "%sinstall.packages(%s, lib=lib, repos=repos, Ncpus=max(1L, parallel::detectCores() - 1L))"
+        % (_LIB, repos, _r_vector(missing)),
         timeout_ms=timeout_ms, poll_interval_ms=5000,
     )
     still = missing_r_packages(page, missing)
