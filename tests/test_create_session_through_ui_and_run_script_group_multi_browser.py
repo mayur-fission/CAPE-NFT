@@ -8,7 +8,9 @@ TEST_DURATION_S:
 - test: source SCRIPT_PATH (must leave OUTPUT_FILE_NAME in
         OUTPUT_DIR/<session name>)
 - a:    list.files(OUTPUT_DIR), repeated LIST_FILES_INTERVAL_S after each answer
-- b:    BACKGROUND_JOB_SCRIPT_PATH as an RStudio background job (must not fail)
+- b:    BACKGROUND_JOB_SCRIPT_PATH (run_until_stopped.R,
+        R_SCRIPT_GROUP_B_BACKGROUND_JOB_MULTI_BROWSER) as an RStudio
+        background job (must not fail)
 - c:    idle
 
 Several machines with the same user (Jenkins USE_EC2_NODES): each sets
@@ -50,7 +52,9 @@ OUTPUT_DIR = env_path("OUTPUT_DIR_GENERATE_CSV", "CSV_SESSIONS_OUTPUT_DIR")
 OUTPUT_FILE_NAME = "generated_data_10kb.csv"
 TEST_DURATION_S = int(env("GROUP_SESSIONS_TEST_DURATION_S", "180"))
 LIST_FILES_INTERVAL_S = int(env("GROUP_A_LIST_FILES_INTERVAL_S", "30"))
-BACKGROUND_JOB_SCRIPT_PATH = env_path("R_SCRIPT_GROUP_B_BACKGROUND_JOB", "GROUP_B_BACKGROUND_JOB_SCRIPT")
+# run_until_stopped.R: loops until stopped; a running job counts as ok and
+# ends when its session is quit.
+BACKGROUND_JOB_SCRIPT_PATH = env_path("R_SCRIPT_GROUP_B_BACKGROUND_JOB_MULTI_BROWSER")
 
 
 def test_ui_created_session_groups_run_mixed_workloads_in_multiple_browsers(

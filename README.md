@@ -60,6 +60,7 @@ Server paths have no defaults in the code: every folder, R script and
 | `R_SCRIPT_CLOSE_TAB_JOB` | test_run_r_close_browser |
 | `R_SCRIPT_GENERATE_CSV` / `OUTPUT_DIR_GENERATE_CSV` | The CSV-session (group) tests |
 | `R_SCRIPT_GROUP_B_WORKBENCH_JOB`, `R_SCRIPT_GROUP_B_BACKGROUND_JOB` | Group B jobs in the group tests |
+| `R_SCRIPT_GROUP_B_BACKGROUND_JOB_MULTI_BROWSER` | Group B background job in test_create_session_through_ui_and_run_script_group_multi_browser (`run_until_stopped.R`) |
 | `R_SCRIPT_CONCURRENT_SESSIONS` / `OUTPUT_DIR_CONCURRENT_SESSIONS` | test_concurrent_sessions (optional; default to the CSV ones) |
 | `R_SCRIPT_CONCURRENT_10MIN`, `R_SCRIPT_CONCURRENT_30MIN` | The 10- and 30-minute concurrent tests |
 | `R_SCRIPT_SMALL_10MIN` | `test_concurrent_sessions_10min_s` (`pmx_10kb_10min.R`; the test is skipped when it is not set) |
