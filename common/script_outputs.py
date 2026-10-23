@@ -113,9 +113,11 @@ def parse_run_summary(text):
         Finished because:  <reason>
         Runtime:           600.3 s (10.01 min)
         Replicates:        2718 x 200 subjects
+        Studies:           12 simulated, 11 fitted OK, 1 failed   (nlmixr2 script)
 
     Returns {"replicates", "subjects_per_replicate", "script_runtime_s",
-    "stop_reason"}, each only when its line is there."""
+    "stop_reason", "studies_simulated", "studies_fitted_ok", "studies_failed"},
+    each only when its line is there."""
     figures = {}
     m = re.search(r"Replicates:\s*(\d+)\s*x\s*(\d+)", text)
     if m:
@@ -126,14 +128,44 @@ def parse_run_summary(text):
     m = re.search(r"Finished because:[ \t]*(.+)", text)
     if m:
         figures["stop_reason"] = m.group(1).strip()
+    m = re.search(r"Studies:\s*(\d+)\s*simulated,\s*(\d+)\s*fitted OK,\s*(\d+)\s*failed", text)
+    if m:
+        figures["studies_simulated"], figures["studies_fitted_ok"], figures["studies_failed"] = map(int, m.groups())
     return figures
+
+
+def run_summary_failure(figures):
+    """Why a run whose script finished without an R error still failed, from
+    its run summary figures (parse_run_summary()): the script caught an error
+    and stopped ("Finished because: error: ..."), or not one study fitted.
+    None when neither."""
+    reason = figures.get("stop_reason", "")
+    if reason.lower().startswith("error"):
+        return "script stopped with %s" % reason
+    if figures.get("studies_simulated") and not figures.get("studies_fitted_ok"):
+        return "no study fitted OK (%d failed)" % figures.get("studies_failed", 0)
+    return None
+
+
+def _apply_run_summary(record, figures, source):
+    """Add the run summary `figures` to the run record, and fail the run when
+    they show the script did not do its work (run_summary_failure())."""
+    record.update(figures)
+    name = record["session_name"]
+    log_step("Run summary of session %s (%s): %s", name, source,
+             ", ".join("%s %s" % (k.replace("_", " "), v) for k, v in figures.items()))
+    failure = run_summary_failure(figures)
+    if failure and record.get("status") == "ok":
+        record["status"] = failure
+        log_step("Run failed in session %s: %s", name, failure)
 
 
 def read_run_summary(page, record, summary_path):
     """Read the script's run summary file `summary_path` (relative to the
     session's working directory) and add its figures (parse_run_summary())
     to the run record, for the timings CSV, summary and charts. Call it
-    before the output is deleted. Never fails the run: a summary that cannot
+    before the output is deleted. Fails the run when the figures show the
+    script did not do its work (run_summary_failure()); a summary that cannot
     be read or has no figures is only logged."""
     name = record["session_name"]
     try:
@@ -147,9 +179,27 @@ def read_run_summary(page, record, summary_path):
         log_step("WARNING: no run summary figures in %s in session %s (%s)", summary_path, name,
                  "file not found" if text is None else "unexpected format")
         return
-    record.update(figures)
-    log_step("Run summary of session %s: %s", name,
-             ", ".join("%s %s" % (k.replace("_", " "), v) for k, v in figures.items()))
+    _apply_run_summary(record, figures, summary_path)
+
+
+def check_console_run_summary(page, record):
+    """For a run without a run summary file: the run summary the script
+    printed to its console, if it printed one (the last "Finished because:"
+    on), added to the run record like read_run_summary(), failing the run
+    when it shows the script did not do its work. A console that cannot be
+    read is only logged."""
+    try:
+        text = get_console_output(page)
+    except Exception as exc:
+        log_step("WARNING: could not read the console of session %s for its run summary: %s",
+                 record["session_name"], " ".join(str(exc).split())[:200])
+        return
+    start = text.rfind("Finished because:")
+    if start < 0:
+        return
+    figures = parse_run_summary(text[start:])
+    if figures:
+        _apply_run_summary(record, figures, "console")
 
 
 def _output_folders(output_paths):

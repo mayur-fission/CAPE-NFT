@@ -11,7 +11,7 @@ from collections import namedtuple
 from config.config import env
 from common.rstudio_console_commands import get_console_output, r_source_command, wait_for_console_ready
 from common.rstudio_session_helper import is_session_alive, open_existing_session
-from common.script_outputs import check_output_file, read_run_summary
+from common.script_outputs import check_console_run_summary, check_output_file, read_run_summary
 from common.script_timings import new_run_record, submit_in_each, wait_for_console_runs
 from common.session_actions import close_all_editor_files, recreate_session_folder, set_session_working_directory
 from common.step_log import log_step
@@ -145,7 +145,10 @@ def run_script_in_launched_sessions(launched, script_path, working_dir=None, tim
     keep it quick. Tabs are left open. With `summary_file` (the script's run
     summary, e.g. "pmx_10kb_output/logs/run_summary.txt") its figures -
     replicates, runtime, why it stopped - are added to each finished run's
-    record first (read_run_summary()), before the output is deleted.
+    record first (read_run_summary()), before the output is deleted; without
+    it, a run summary the script printed to its console is read instead
+    (check_console_run_summary()). Either way a summary showing the script
+    stopped on an error, or fitted no study, fails the run.
 
     Returns one run record per session (see common.script_timings); sessions
     that failed to open are recorded as such.
@@ -171,6 +174,8 @@ def run_script_in_launched_sessions(launched, script_path, working_dir=None, tim
     def _on_done(page, record, session_dir):
         if summary_file:
             read_run_summary(page, record, summary_file)
+        else:
+            check_console_run_summary(page, record)
         if output_path:
             check_output_file(page, record, output_path, delete=delete_output, remove_dir=session_dir)
 

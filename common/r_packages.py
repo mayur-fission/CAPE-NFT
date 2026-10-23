@@ -18,11 +18,20 @@ from config.config import env
 # A package install (with its dependencies) can take a while, more so when
 # the repository has no binaries and they are compiled.
 INSTALL_TIMEOUT_MS = int(env("R_PACKAGES_INSTALL_TIMEOUT_MS", "3600000"))
-# Repository to install from. The default is a dated CRAN snapshot from before
-# R 4.5 came out: the server runs R 4.4, and current CRAN versions of some
-# packages (e.g. Deriv, which nlmixr2 needs) require R >= 4.5. Set it blank to
-# use the session's own repository (getOption("repos")) instead.
-R_PACKAGES_REPO = env("R_PACKAGES_REPO", "https://packagemanager.posit.co/cran/2025-03-31")
+# Repository to install from:
+#   auto  (default) Posit Package Manager's precompiled Linux binaries of the
+#         CRAN snapshot R_PACKAGES_SNAPSHOT, for the server's OS (read from its
+#         /etc/os-release: Ubuntu/Debian by codename, RHEL-likes as rhel<major>).
+#         Binaries, as some packages (qs, which rxode2 needs) fail to compile
+#         from source on the server, and they install in seconds, not minutes.
+#   <URL> that repository, e.g. https://packagemanager.posit.co/cran/2025-03-31
+#         for the snapshot's source packages
+#   blank the session's own repository (getOption("repos"))
+R_PACKAGES_REPO = env("R_PACKAGES_REPO", "auto")
+# Snapshot date for R_PACKAGES_REPO=auto: before R 4.5 came out, as the server
+# runs R 4.4 and current CRAN versions of some packages (e.g. Deriv, which
+# nlmixr2 needs) require R >= 4.5.
+R_PACKAGES_SNAPSHOT = env("R_PACKAGES_SNAPSHOT", "2025-03-31")
 # Repository to install from when R_PACKAGES_REPO is blank and R has none set
 # (getOption("repos") is "@CRAN@", which would open RStudio's mirror chooser).
 FALLBACK_REPO = "https://cloud.r-project.org"
@@ -48,6 +57,20 @@ def _r_vector(packages):
     return "c(%s)" % ", ".join(r_string(p) for p in packages)
 
 
+def _repo_expr():
+    """R expression for the R_PACKAGES_REPO repository's URL ("" when blank)."""
+    if R_PACKAGES_REPO.lower() != "auto":
+        return r_string(R_PACKAGES_REPO)
+    # /etc/os-release as a named list of its KEY=value lines, quotes dropped
+    # (intToUtf8(34L) is a double quote, kept out of the typed command)
+    os_release = ("(function(l) setNames(as.list(gsub(intToUtf8(34L), '', sub('^[^=]*=', '', l))), "
+                  "sub('=.*', '', l)))(readLines('/etc/os-release'))")
+    return ("(function(os) paste0('https://packagemanager.posit.co/cran/__linux__/', "
+            "if (os[['ID']] %%in%% c('ubuntu', 'debian')) os[['VERSION_CODENAME']] "
+            "else paste0('rhel', sub('[.].*', '', os[['VERSION_ID']])), '/', %s))(%s)"
+            % (r_string(R_PACKAGES_SNAPSHOT), os_release))
+
+
 def missing_r_packages(page, packages):
     """The ones of `packages` not installed in any library of the session
     on `page` - or, with R_PACKAGES_REPO set, installed in a version other
@@ -57,7 +80,7 @@ def missing_r_packages(page, packages):
         # (available.packages() downloads the repository's package index)
         expr = ("(function(ap) Filter(function(p) !nzchar(system.file(package=p)) || "
                 "isTRUE(as.character(packageVersion(p)) != ap[match(p, rownames(ap)), 'Version']), %s))"
-                "(available.packages(repos=%s))" % (_r_vector(packages), r_string(R_PACKAGES_REPO)))
+                "(available.packages(repos=%s))" % (_r_vector(packages), _repo_expr()))
         timeout_ms = 120000
     else:
         expr = "Filter(function(p) !nzchar(system.file(package=p)), %s)" % _r_vector(packages)
@@ -75,19 +98,28 @@ def ensure_r_packages(page, packages, timeout_ms=INSTALL_TIMEOUT_MS):
         log_step("R packages already installed: %s", ", ".join(packages))
         return []
     log_step("R packages missing or not the repository's version: %s - installing them (with their dependencies) from %s",
-             ", ".join(missing), R_PACKAGES_REPO or "the session's repository")
+             ", ".join(missing), {"": "the session's repository",
+                                  "auto": "the %s snapshot's Linux binaries" % R_PACKAGES_SNAPSHOT,
+                                  }.get(R_PACKAGES_REPO.lower(), R_PACKAGES_REPO))
     if R_PACKAGES_REPO:
-        repos = "repos <- %s; " % r_string(R_PACKAGES_REPO)
+        repos = "repos <- %s; " % _repo_expr()
     else:
         repos = "repos <- getOption('repos'); if (any(repos == '@CRAN@')) repos <- %s; " % r_string(FALLBACK_REPO)
+    # An install that was stopped or crashed leaves a 00LOCK* folder in the
+    # library, and every later install then fails with "failed to lock
+    # directory". Only ones older than the install timeout are removed: a
+    # newer one can be another machine installing as the same user right now.
+    unlock = ("locks <- list.files(lib, '^00LOCK', full.names=TRUE); "
+              "unlink(locks[as.numeric(difftime(Sys.time(), file.mtime(locks), units='secs')) > %d], "
+              "recursive=TRUE); " % (timeout_ms // 1000))
     # Timed here, not by run_console_command(): its clock starts only once
     # the console has taken the command, which can be well after it is typed
     started = time.time()
     run_console_command(
         page,
         "lib <- %s; dir.create(lib, recursive=TRUE, showWarnings=FALSE); .libPaths(c(lib, .libPaths())); "
-        "%sinstall.packages(%s, lib=lib, repos=repos, Ncpus=max(1L, parallel::detectCores() - 1L))"
-        % (_LIB, repos, _r_vector(missing)),
+        "%s%sinstall.packages(%s, lib=lib, repos=repos, Ncpus=max(1L, parallel::detectCores() - 1L))"
+        % (_LIB, unlock, repos, _r_vector(missing)),
         timeout_ms=timeout_ms, poll_interval_ms=5000,
     )
     still = missing_r_packages(page, missing)
