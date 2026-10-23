@@ -29,7 +29,8 @@ logins don't clash.
 Per-session timings go to evidence/rstudio_script_timings_<TIMINGS_LABEL>.csv
 and the overall time to evidence/rstudio_concurrent_summary_<TIMINGS_LABEL>.json,
 with bar charts of the time per session (common/session_time_report.py) next
-to the CSV, all attached to Allure. Set PMT_10MIN_THRESHOLD_S to mark a
+to the CSV, all attached to Allure. The CSV has each session's script, so
+the charts group the sessions by script and compare them per script. Set PMT_10MIN_THRESHOLD_S to mark a
 slow-session limit on the charts.
 """
 import time
@@ -131,7 +132,7 @@ def test_pmt_10min_all_workload_scripts_in_every_browser(
         retry_wait_s=LAUNCH_RETRY_WAIT_S, poll_interval_ms=POLL_INTERVAL_MS,
     )
     timings_csv = script_timings_csv_path(TIMINGS_LABEL)
-    write_script_timings_csv(timings_csv, runs)
+    write_script_timings_csv(timings_csv, runs, scripts)
     summarize_concurrent_runs(runs, TIMINGS_LABEL, SESSION_COUNT, BROWSER_COUNT)
     generate_session_time_report(
         timings_csv, title="Time taken per session (five 10-minute workload scripts)", threshold=THRESHOLD_S,

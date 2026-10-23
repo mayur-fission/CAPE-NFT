@@ -223,17 +223,21 @@ RUN_SUMMARY_COLUMNS = (
 )
 
 
-def write_script_timings_csv(path, script_runs):
+def write_script_timings_csv(path, script_runs, scripts=None):
     """One row per record, ordered by start time: session name, start/end
     time, time taken (s) and status. End time and time taken are blank for
     runs that errored or timed out. Does nothing if there are no records.
+    With `scripts` ({session name: R script path}) a "Script" column (the
+    script's file name) follows, so the report can group sessions by script.
     Run summary figures (RUN_SUMMARY_COLUMNS) follow as extra columns when
     any record has them.
     """
     if not script_runs:
         return
     extra = [(key, header) for key, header in RUN_SUMMARY_COLUMNS if any(key in r for r in script_runs)]
-    rows = [["Session Name", "Start Time", "End Time", "Time Taken (s)", "Status"] + [h for _, h in extra]]
+    script_col = ["Script"] if scripts else []
+    rows = [["Session Name", "Start Time", "End Time", "Time Taken (s)", "Status"] + script_col
+            + [h for _, h in extra]]
     for run in sorted(script_runs, key=lambda r: r["started"] or 0):
         ended = run.get("ended")
         rows.append([
@@ -242,6 +246,7 @@ def write_script_timings_csv(path, script_runs):
             _format_timestamp(ended),
             "%.2f" % (ended - run["started"]) if ended is not None else "",
             run.get("status") or "not run",
-        ] + ["" if run.get(key) is None else run[key] for key, _ in extra])
+        ] + ([os.path.basename(scripts.get(run["session_name"], ""))] if scripts else [])
+          + ["" if run.get(key) is None else run[key] for key, _ in extra])
     write_csv_report(path, rows)
     print("[rstudio-local] wrote script timings to %s" % path)
