@@ -17,15 +17,27 @@ Several machines with the same user (Jenkins USE_EC2_NODES): each sets
 GROUP_SESSIONS_UI_NODE_PREFIX (N1_, N2_, ...) so it only touches its own
 sessions (N1_B1_TEST_USER_1, ...), and GROUP_SESSIONS_UI_START_AT_EPOCH so
 the machines' logins don't clash.
+
+Per-run timings (with what each session ran: the script, list.files() or
+the background job) go to evidence/rstudio_script_timings_<TIMINGS_LABEL>.csv
+and the overall time to evidence/rstudio_concurrent_summary_<TIMINGS_LABEL>.json,
+with bar charts of the time per run grouped by what it ran
+(common/session_time_report.py) next to the CSV, all attached to Allure. Set
+GROUP_SESSIONS_UI_THRESHOLD_S to mark a slow-run limit on the charts.
 """
+import posixpath
+import time
+
 import pytest
 
-from common.api_helper import group_sessions_csv_paths
+from common.api_helper import group_sessions_csv_paths, read_session_names
 from common.api_ui_combo import run_group_workloads_across_browsers
 from common.parallel_browsers import wait_until_epoch
+from common.result_printing import summarize_concurrent_runs
 from config.config import env, env_path
 from common.script_timings import script_timings_csv_path, write_script_timings_csv
 from common.session_naming_logic import browser_name_prefixes
+from common.session_time_report import describe_run, generate_session_time_report
 
 pytestmark = pytest.mark.rstudio_local
 
@@ -40,8 +52,11 @@ NAME_PREFIXES = [NODE_PREFIX + p for p in browser_name_prefixes(BROWSER_COUNT)]
 START_AT_EPOCH = env("GROUP_SESSIONS_UI_START_AT_EPOCH") or None
 # Gap between starting one browser and the next, so their logins don't clash.
 BROWSER_STAGGER_S = int(env("GROUP_SESSIONS_UI_BROWSER_STAGGER_S", "30"))
-TIMINGS_LABEL = "new_ui_sessions_%d_browsers_U%d%s" % (BROWSER_COUNT, CSV_SESSIONS_USER,
-                                                        "_" + NODE_PREFIX.rstrip("_") if NODE_PREFIX else "")
+# Run start time in the name: every run writes its own CSV, charts and
+# summary instead of overwriting another's
+TIMINGS_LABEL = "new_ui_sessions_%d_browsers_U%d%s_%s" % (BROWSER_COUNT, CSV_SESSIONS_USER,
+                                                           "_" + NODE_PREFIX.rstrip("_") if NODE_PREFIX else "",
+                                                           time.strftime("%Y%m%d-%H%M%S"))
 LAUNCH_ATTEMPTS = int(env("GROUP_SESSIONS_UI_LAUNCH_ATTEMPTS", "3"))
 # How long one launch may take to reach the IDE before it is retried, and
 # the wait before a retry (which reopens the session if it was created).
@@ -55,6 +70,18 @@ LIST_FILES_INTERVAL_S = int(env("GROUP_A_LIST_FILES_INTERVAL_S", "30"))
 # run_until_stopped.R: loops until stopped; a running job counts as ok and
 # ends when its session is quit.
 BACKGROUND_JOB_SCRIPT_PATH = env_path("R_SCRIPT_GROUP_B_BACKGROUND_JOB_MULTI_BROWSER")
+# Slow-run limit drawn on the session time charts (blank = none).
+THRESHOLD_S = float(env("GROUP_SESSIONS_UI_THRESHOLD_S") or 0) or None
+
+
+def session_workloads():
+    """{session name: what it runs} for the charts' grouping - the script's
+    path (group test), list.files() (a) or the background job's script (b);
+    the idle group c has no runs."""
+    workloads = {"test": SCRIPT_PATH, "a": "list.files()",
+                 "b": "%s (background job)" % posixpath.basename(BACKGROUND_JOB_SCRIPT_PATH)}
+    return {prefix + name: workload for group, workload in workloads.items() for prefix in NAME_PREFIXES
+            for name in read_session_names(GROUP_CSVS[group])}
 
 
 def test_ui_created_session_groups_run_mixed_workloads_in_multiple_browsers(
@@ -80,5 +107,14 @@ def test_ui_created_session_groups_run_mixed_workloads_in_multiple_browsers(
         output_file_name=OUTPUT_FILE_NAME, job_script_path=BACKGROUND_JOB_SCRIPT_PATH,
         list_files_interval_s=LIST_FILES_INTERVAL_S, background_jobs=True,
     )
-    write_script_timings_csv(script_timings_csv_path(TIMINGS_LABEL), runs)
+    timings_csv = script_timings_csv_path(TIMINGS_LABEL)
+    workloads = session_workloads()
+    write_script_timings_csv(timings_csv, runs, workloads)
+    session_count = sum(len(read_session_names(path)) for path in GROUP_CSVS.values()) * BROWSER_COUNT
+    summarize_concurrent_runs(runs, TIMINGS_LABEL, session_count, BROWSER_COUNT)
+    generate_session_time_report(
+        timings_csv, title="Time taken per run (mixed group workloads)", threshold=THRESHOLD_S,
+        browser=browser_name, test_name=describe_run(session_count, BROWSER_COUNT, CSV_SESSIONS_USER),
+        script=", ".join(dict.fromkeys(posixpath.basename(w) for w in workloads.values())),
+    )
     assert not errors, "\n".join(errors)

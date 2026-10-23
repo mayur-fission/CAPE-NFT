@@ -31,6 +31,8 @@ INK = "#1b2a41"
 # One color per R script when the sessions ran several, in this fixed order
 # (red is left out: it marks failed sessions).
 SCRIPT_COLORS = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6")
+# Scripts get a time axis each when their averages differ more than this.
+SEPARATE_PANELS_RATIO = 3
 # Statuses of a successful session (lower case); blank also counts as ok.
 OK_STATUSES = ("ok", "pass", "passed", "success", "successful", "completed", "done", "true")
 REPORT_TZ = env("SESSION_REPORT_TZ", "Asia/Kolkata")
@@ -148,13 +150,39 @@ def script_title(script):
     return script or "(unknown script)"
 
 
+def _bar_labels(sessions, scripts):
+    """Bar labels for grouped charts: the trailing number (short_label())
+    while that is unique within each script; otherwise the session names
+    without the prefix all of them share (e.g. a node prefix "N1_"), with
+    "#2", "#3", ... on repeated runs of one session (e.g. list.files() calls)."""
+    sessions, scripts = [str(s) for s in sessions], list(scripts)
+    short = [short_label(s) for s in sessions]
+    if all(len({l for l, g in zip(short, scripts) if g == grp}) == scripts.count(grp) for grp in set(scripts)):
+        return short
+    common = os.path.commonprefix(sessions)
+    common = common[:common.rfind("_") + 1]
+    seen, labels = {}, []
+    for s in sessions:
+        seen[s] = seen.get(s, 0) + 1
+        labels.append(s[len(common):] + (" #%d" % seen[s] if seen[s] > 1 else ""))
+    return labels
+
+
 def _group_sorted(df, groups):
     """`df` with each script's sessions together (scripts in `groups` order),
     by session number within a script."""
     rank = {s: i for i, s in enumerate(groups)}
     return (df.assign(_g=df["script"].map(lambda s: rank.get(s, len(groups))),
                       _k=df["session"].map(_session_number))
-            .sort_values(["_g", "_k"], kind="stable").drop(columns=["_g", "_k"]).reset_index(drop=True))
+            .sort_values(["_g", "_k", "session"], kind="stable").drop(columns=["_g", "_k"]).reset_index(drop=True))
+
+
+def _needs_separate_axes(df, groups):
+    """True when the scripts' average times differ more than
+    SEPARATE_PANELS_RATIO times, too much to share one time axis."""
+    good = df[~df["failed"]]
+    means = [m for m in (good.loc[good["script"] == g, "time"].mean() for g in groups) if m == m]
+    return len(means) > 1 and max(means) > SEPARATE_PANELS_RATIO * max(min(means), 1e-9)
 
 
 def _script_color(groups, script):
@@ -190,8 +218,17 @@ def _legend_handles(Patch):
 
 
 def _draw_header(ax, df, title, o, extra=()):
-    """Title + test details + script + test run time stamps (when
-    available) + `extra` lines above `ax`."""
+    """Title + _header_lines() above `ax`."""
+    sub = _header_lines(df, o, extra)
+    ax.set_title(title, loc="left", fontweight="bold", pad=8 + 14 * len(sub))
+    for i, line in enumerate(sub):
+        ax.annotate(line, (0, 1), xycoords="axes fraction", textcoords="offset points",
+                    xytext=(0, 4 + 14 * (len(sub) - 1 - i)), va="bottom", fontsize=9, color="#555")
+
+
+def _header_lines(df, o, extra=()):
+    """Test details + script + test run time stamps (when available) +
+    `extra` lines, for under a chart's title."""
     sub = []
     det = [f"{k}: {v}" for k, v in (("Test", o.test_name), ("Environment", o.environment),
                                     ("Browser", o.browser), ("Notes", o.notes)) if v]
@@ -207,10 +244,7 @@ def _draw_header(ax, df, title, o, extra=()):
         sub.append(f"Test run: {t0.strftime(fmt)} to {t1.strftime(fmt)} "
                    f"(total {(t1 - t0).total_seconds():.1f} seconds, timestamps as recorded in the data)")
     sub.extend(extra)
-    ax.set_title(title, loc="left", fontweight="bold", pad=8 + 14 * len(sub))
-    for i, line in enumerate(sub):
-        ax.annotate(line, (0, 1), xycoords="axes fraction", textcoords="offset points",
-                    xytext=(0, 4 + 14 * (len(sub) - 1 - i)), va="bottom", fontsize=9, color="#555")
+    return sub
 
 
 def _time_stats(times):
@@ -236,15 +270,9 @@ def build_grouped_session_chart(df, out, title, o, groups, tz=REPORT_TZ):
     from matplotlib.transforms import blended_transform_factory
 
     df = _group_sorted(df, groups)
-    labels = [short_label(s) for s in df["session"]]
+    labels = _bar_labels(df["session"], df["script"])
     times, failed, scripts = df["time"].tolist(), df["failed"].tolist(), df["script"].tolist()
     n = len(df)
-    # x position per bar, with one empty slot between scripts
-    x, pos = [], -1
-    for i, s in enumerate(scripts):
-        pos += 2 if i and s != scripts[i - 1] else 1
-        x.append(pos)
-    slots = pos + 1
 
     ok = [t for t, f in zip(times, failed) if not f]
     n_ok, n_fail = len(ok), sum(failed)
@@ -257,105 +285,152 @@ def build_grouped_session_chart(df, out, title, o, groups, tz=REPORT_TZ):
                       **(_time_stats(g_ok) if g_ok else {}))
 
     vmin, vmax = overall["min"], overall["max"]
-    span = (vmax - vmin) or max(vmax * 0.1, 1)
-    ylo = max(0, vmin - span * 0.35)
-    yhi = vmax + span * 0.75  # headroom for the script bands and markers
     thr = o.threshold
-    if thr is not None:
-        yhi = max(yhi, thr + span * 0.45)
-    stub = ylo + (vmin - ylo) * 0.6  # height of a failed bar that has no time
+    # Scripts whose times are of the same order share one time axis, so they
+    # can be compared; otherwise (e.g. 0.3 s list.files() calls next to a
+    # 180 s background job) each gets a panel with a time axis of its own.
+    separate = _needs_separate_axes(df, groups)
+    panels = [[g] for g in groups] if separate else [groups]
+    # x position of each bar within its panel, one empty slot between scripts
+    x, panel_slots = [0] * n, []
+    for panel in panels:
+        pos = -1
+        for k, g in enumerate(panel):
+            for j, i in enumerate(per[g]["idx"]):
+                pos += 2 if k and not j else 1
+                x[i] = pos
+        panel_slots.append(pos + 1)
 
     # wide enough for every script's name over its bars
     per_slot = max([0.24] + [(len(script_title(g)) * 0.085 + 0.3) / (len(per[g]["idx"]) + 1) for g in groups])
-    width = min(max(10, per_slot * slots + 3), 60)
+    width = min(max(10, per_slot * sum(panel_slots) + 3 + 0.9 * (len(panels) - 1)), 60)
     rows = len(groups) + 2  # header + scripts + all sessions
     table_h = 0.3 * rows + 0.5
-    fig, (ax, tax) = plt.subplots(2, 1, figsize=(width, 7.2 + table_h), dpi=150,
-                                  gridspec_kw=dict(height_ratios=[7.2, table_h]))
-
-    heights = [t if not f else (t if pd.notna(t) else stub) for t, f in zip(times, failed)]
-    colors = [FAIL_C if f else _script_color(groups, s) for f, s in zip(failed, scripts)]
-    bars = ax.bar(x, [h - ylo for h in heights], bottom=ylo, color=colors, width=0.8,
-                  edgecolor="white", linewidth=0.6)
-    for b, f in zip(bars, failed):
-        if f:
-            b.set_hatch("///")
+    head_lines = _header_lines(df, o, extra=[
+        f"{len(groups)} scripts - sessions grouped by script; compare times within a script"
+        + ("; each script has its own time axis (their times differ more than %gx)" % SEPARATE_PANELS_RATIO
+           if separate else "")
+        + f"   |   Success rate: {n_ok} of {n} ({100.0 * n_ok / n:.1f}%)   |   Failed sessions: {n_fail}"])
+    head_h = 0.35 + 0.2 * len(head_lines) + 0.35  # title, lines, legend (inches)
+    fig_h = head_h + 6.6 + table_h
+    fig = plt.figure(figsize=(width, fig_h), dpi=150)
+    outer = fig.add_gridspec(2, 1, height_ratios=[6.6, table_h])
+    top_row = outer[0].subgridspec(1, len(panels), width_ratios=panel_slots)
+    axes = [fig.add_subplot(top_row[0, k]) for k in range(len(panels))]
+    tax = fig.add_subplot(outer[1])
 
     lab_fs = 8 if n <= 30 else 7 if n <= 60 else 6 if n <= 120 else 5
-    pad = (yhi - ylo) * 0.008
-    for xi, h, t, f, c in zip(x, heights, times, failed, colors):
-        txt = "FAIL" if (f and pd.isna(t)) else f"{t:.2f}"
-        ax.text(xi, h - pad, txt, rotation=90, ha="center", va="top", fontsize=lab_fs, color=_ink_on(c))
+    colors = [FAIL_C if f else _script_color(groups, s) for f, s in zip(failed, scripts)]
+    for ax, panel, slots in zip(axes, panels, panel_slots):
+        idx = [i for g in panel for i in per[g]["idx"]]
+        p_ok = [times[i] for i in idx if not failed[i]] or [vmin]
+        p_min, p_max = min(p_ok), max(p_ok)
+        span = (p_max - p_min) or max(p_max * 0.1, 1e-3)
+        ylo = max(0, p_min - span * 0.35)
+        yhi = p_max + span * 0.75  # headroom for the script bands and markers
+        # the threshold only where it is near this panel's times
+        show_thr = thr is not None and (not separate or thr <= yhi + span)
+        if show_thr:
+            yhi = max(yhi, thr + span * 0.45)
+        stub = ylo + (p_min - ylo) * 0.6  # height of a failed bar that has no time
+        heights = {i: times[i] if not failed[i] or pd.notna(times[i]) else stub for i in idx}
 
-    band = blended_transform_factory(ax.transData, ax.transAxes)
-    for g in groups:
-        p = per[g]
-        x0, x1 = x[p["idx"][0]], x[p["idx"][-1]]
-        color = _script_color(groups, g)
-        ax.axvspan(x0 - 0.5, x1 + 0.5, color=_tint(color, 0.08), lw=0, zorder=0)
-        ax.text((x0 + x1) / 2, 0.985, script_title(g), transform=band, ha="center", va="top", fontsize=9,
-                fontweight="bold", color=INK,
-                bbox=dict(boxstyle="round,pad=0.35", fc=_tint(color, 0.25), ec=color, lw=1.2))
-        ax.text((x0 + x1) / 2, 0.93, f"avg {p['mean']:.2f} s" if "mean" in p else "all failed",
-                transform=band, ha="center", va="top", fontsize=8, color=INK)
-        if "mean" in p:
-            ax.hlines(p["mean"], x0 - 0.45, x1 + 0.45, colors=AVG_C, linestyles="--", lw=1.3, zorder=3)
-        g_ok = [i for i in p["idx"] if not failed[i]]
-        if len(g_ok) > 1 and p["max"] != p["min"]:
-            for i in g_ok:
-                if times[i] in (p["max"], p["min"]):
-                    slow = times[i] == p["max"]
-                    ax.plot(x[i], heights[i] + pad * 3, marker="^" if slow else "v", ms=7, ls="none",
-                            color=INK if slow else "white", mec=INK, mew=1.2, zorder=5)
+        bars = ax.bar([x[i] for i in idx], [heights[i] - ylo for i in idx], bottom=ylo,
+                      color=[colors[i] for i in idx], width=0.8, edgecolor="white", linewidth=0.6)
+        for b, i in zip(bars, idx):
+            if failed[i]:
+                b.set_hatch("///")
 
-    if thr is not None:
-        ax.axhline(thr, color="#8e44ad", ls="-.", lw=1.4)
-        ax.text(slots - 0.4, thr + pad * 2, f"Threshold: {thr:g} seconds", color="#8e44ad",
-                fontsize=9, fontweight="bold", ha="right")
+        pad = (yhi - ylo) * 0.008
+        # a bar too short for its value gets it above the bar, and its
+        # ▲ / ▽ marker above that
+        label_h = (yhi - ylo) * 0.09
+        above = {i: heights[i] - ylo < label_h for i in idx}
+        for i in idx:
+            txt = "FAIL" if (failed[i] and pd.isna(times[i])) else f"{times[i]:.2f}"
+            ax.text(x[i], heights[i] + pad if above[i] else heights[i] - pad, txt, rotation=90, ha="center",
+                    va="bottom" if above[i] else "top", fontsize=lab_fs,
+                    color=INK if above[i] else _ink_on(colors[i]))
 
-    ax.set_ylim(ylo, yhi)
-    ax.set_xlim(-0.8, slots - 0.2)
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=0 if n <= 30 else 90, fontsize=9 if n <= 30 else 7 if n <= 60 else 5)
-    ax.set_xlabel("Concurrent session (Sessions opened in separate browser tab), grouped by R script")
-    ax.set_ylabel("Time taken to execute script (Seconds)")
-    _draw_header(ax, df, title, o, extra=[
-        f"{len(groups)} R scripts - sessions grouped by script; compare times within a script   |   "
-        f"Success rate: {n_ok} of {n} ({100.0 * n_ok / n:.1f}%)   |   Failed sessions: {n_fail}"])
+        band = blended_transform_factory(ax.transData, ax.transAxes)
+        for g in panel:
+            p = per[g]
+            x0, x1 = x[p["idx"][0]], x[p["idx"][-1]]
+            color = _script_color(groups, g)
+            ax.axvspan(x0 - 0.5, x1 + 0.5, color=_tint(color, 0.08), lw=0, zorder=0)
+            ax.text((x0 + x1) / 2, 0.985, script_title(g), transform=band, ha="center", va="top", fontsize=9,
+                    fontweight="bold", color=INK,
+                    bbox=dict(boxstyle="round,pad=0.35", fc=_tint(color, 0.25), ec=color, lw=1.2))
+            ax.text((x0 + x1) / 2, 0.93, f"avg {p['mean']:.2f} s" if "mean" in p else "all failed",
+                    transform=band, ha="center", va="top", fontsize=8, color=INK)
+            if "mean" in p:
+                ax.hlines(p["mean"], x0 - 0.45, x1 + 0.45, colors=AVG_C, linestyles="--", lw=1.3, zorder=3)
+            g_ok = [i for i in p["idx"] if not failed[i]]
+            if len(g_ok) > 1 and p["max"] != p["min"]:
+                for i in g_ok:
+                    if times[i] in (p["max"], p["min"]):
+                        slow = times[i] == p["max"]
+                        ax.plot(x[i], heights[i] + pad * 3 + (label_h if above[i] else 0),
+                                marker="^" if slow else "v", ms=7, ls="none",
+                                color=INK if slow else "white", mec=INK, mew=1.2, zorder=5)
+
+        if show_thr:
+            ax.axhline(thr, color="#8e44ad", ls="-.", lw=1.4)
+            ax.text(slots - 0.4, thr + pad * 2, f"Threshold: {thr:g} seconds", color="#8e44ad",
+                    fontsize=9, fontweight="bold", ha="right")
+
+        p_labels = [labels[i] for i in idx]
+        ax.set_ylim(ylo, yhi)
+        ax.set_xlim(-0.8, slots - 0.2)
+        ax.set_xticks([x[i] for i in idx])
+        ax.set_xticklabels(p_labels, rotation=0 if len(idx) <= 30 and max(map(len, p_labels)) <= 3 else 90,
+                           fontsize=9 if n <= 30 else 7 if n <= 60 else 5)
+        ax.set_xlabel("Concurrent session" if separate else
+                      "Concurrent session (Sessions opened in separate browser tab), grouped by R script")
+        for s in ("top", "right"):
+            ax.spines[s].set_visible(False)
+        ax.grid(axis="y", alpha=0.3)
+    axes[0].set_ylabel("Time taken to execute script (Seconds)")
+
+    # header and legend across the top of the figure
+    top = 1 - 0.2 / fig_h
+    fig.text(0.01, top, title, fontsize=12, fontweight="bold", va="top")
+    for k, line in enumerate(head_lines):
+        fig.text(0.01, top - (0.3 + 0.2 * k) / fig_h, line, fontsize=9, color="#555", va="top")
     marks = [Line2D([], [], color=AVG_C, ls="--", lw=1.3, label="Script average"),
              Line2D([], [], marker="^", ls="none", color=INK, mec=INK, ms=7, label="Slowest of its script"),
              Line2D([], [], marker="v", ls="none", color="white", mec=INK, mew=1.2, ms=7,
                     label="Fastest of its script")]
     if n_fail:
         marks.append(Patch(facecolor=FAIL_C, hatch="///", edgecolor="white", label="Failed session"))
-    ax.legend(handles=marks, loc="upper left", bbox_to_anchor=(0, 0.87), fontsize=8, frameon=False,
-              ncol=len(marks))
-    for s in ("top", "right"):
-        ax.spines[s].set_visible(False)
-    ax.grid(axis="y", alpha=0.3)
+    fig.legend(handles=marks, loc="upper left", bbox_to_anchor=(0.005, top - (0.3 + 0.2 * len(head_lines)) / fig_h),
+               fontsize=8, frameon=False, ncol=len(marks))
 
     # per-script stats table
     def at(p, key):  # "598.05 (#5)": the time and the sessions with it
-        who = ", ".join("#" + labels[i] for i in p["idx"] if not failed[i] and times[i] == p[key])
+        who = ", ".join(("#" if labels[i].isdigit() else "") + labels[i]
+                        for i in p["idx"] if not failed[i] and times[i] == p[key])
         return f"{p[key]:.2f} ({who})"
 
-    fastest = min((per[g]["mean"] for g in groups if "mean" in per[g]), default=None)
-    head = ["R script", "Sessions", "Failed", "Average (s)", "Median (s)", "Min (s)", "Max (s)",
-            "Std dev (s)", "P95 (s)", "Max - min (s)", "Average vs fastest script"]
+    # comparing scripts' averages only makes sense on a shared time axis
+    fastest = None if separate else min((per[g]["mean"] for g in groups if "mean" in per[g]), default=None)
+    head = ["Script", "Sessions", "Failed", "Average (s)", "Median (s)", "Min (s)", "Max (s)",
+            "Std dev (s)", "P95 (s)", "Max - min (s)"] + (["Average vs fastest script"] if fastest else [])
     cells, fills = [], []
     for g in groups:
         p = per[g]
         if "mean" in p:
             cells.append([script_title(g), p["sessions"], p["failed"], f"{p['mean']:.2f}", f"{p['median']:.2f}",
                           at(p, "min"), at(p, "max"), f"{p['std']:.2f}", f"{p['p95']:.2f}",
-                          f"{p['max'] - p['min']:.2f}",
-                          "fastest" if p["mean"] == fastest else f"+{100.0 * (p['mean'] / fastest - 1):.1f}%"])
+                          f"{p['max'] - p['min']:.2f}"]
+                         + (["fastest" if p["mean"] == fastest else f"+{100.0 * (p['mean'] / fastest - 1):.1f}%"]
+                            if fastest else []))
         else:
-            cells.append([script_title(g), p["sessions"], p["failed"]] + ["all failed"] + ["-"] * 7)
+            cells.append([script_title(g), p["sessions"], p["failed"], "all failed"] + ["-"] * (len(head) - 4))
         fills.append(_tint(_script_color(groups, g), 0.22))
     cells.append(["All sessions (mixed scripts)", n, n_fail, f"{overall['mean']:.2f}", f"{overall['median']:.2f}",
                   f"{vmin:.2f}", f"{vmax:.2f}", f"{overall['std']:.2f}", f"{overall['p95']:.2f}",
-                  f"{vmax - vmin:.2f}", ""])
+                  f"{vmax - vmin:.2f}"] + ([""] if fastest else []))
     fills.append("#f2f2f2")
     tax.axis("off")
     table = tax.table(cellText=cells, colLabels=head, loc="upper center", cellLoc="center")
@@ -373,7 +448,7 @@ def build_grouped_session_chart(df, out, title, o, groups, tz=REPORT_TZ):
     table.auto_set_column_width(list(range(len(head))))
 
     fig.text(0.01, 0.005, f"Generated: {_now_stamp(tz)}", fontsize=8, color="#666")
-    plt.tight_layout(rect=(0, 0.02, 1, 1))
+    plt.tight_layout(rect=(0, 0.02, 1, 1 - head_h / fig_h))
     fig.savefig(out)
     plt.close(fig)
 
@@ -545,7 +620,8 @@ def build_timeline_chart(df, out, title, tz=REPORT_TZ, script="", test_file=""):
     off = (started["start"] - t0).dt.total_seconds().tolist() + [0.0] * len(not_started)
     dur = (started["end2"] - started["start"]).dt.total_seconds().tolist() + [0.0] * len(not_started)
     groups = script_groups(df)
-    labels = [short_label(s) + (f"  {script_title(g)}" if groups else "") for s, g in zip(d["session"], d["script"])]
+    labels = ([f"{l}  {script_title(g)}" for l, g in zip(_bar_labels(d["session"], d["script"]), d["script"])]
+              if groups else [short_label(s) for s in d["session"]])
     failed = d["failed"].tolist()
     times = d["time"].tolist()
     statuses = d["status"].tolist()
@@ -681,6 +757,8 @@ def _build_grouped_histogram_chart(df, out, title, o, groups, tz=REPORT_TZ):
 
     good = df[~df["failed"]]
     ok = good["time"].astype(float).to_numpy()
+    if _needs_separate_axes(df, groups):
+        return _build_histogram_per_script(df, out, title, o, groups, tz=tz)
     nb = int(min(max(np.ceil(np.sqrt(len(ok))), 5), 30))
     edges = np.histogram_bin_edges(ok, bins=nb)
     mids, w = (edges[:-1] + edges[1:]) / 2, edges[1] - edges[0]
@@ -720,6 +798,57 @@ def _build_grouped_histogram_chart(df, out, title, o, groups, tz=REPORT_TZ):
     ax.grid(axis="y", alpha=0.3)
     fig.text(0.01, 0.005, f"Generated: {_now_stamp(tz)}", fontsize=8, color="#666")
     plt.tight_layout(rect=(0, 0.025, 1, 1))
+    fig.savefig(out)
+    plt.close(fig)
+
+
+def _build_histogram_per_script(df, out, title, o, groups, tz=REPORT_TZ):
+    """Chart 3 when the scripts' times are too far apart for one axis: a
+    histogram per script, each with its own time axis and average marked."""
+    np, plt, _, _ = _plot_libs()
+    from matplotlib.ticker import MaxNLocator
+
+    good = df[~df["failed"]]
+    shown = [g for g in groups if (good["script"] == g).any()]
+    cols = min(len(shown), 3)
+    rows = -(-len(shown) // cols)
+    fig, axes = plt.subplots(rows, cols, figsize=(5 * cols, 3.6 * rows + 1.2), dpi=150, squeeze=False)
+    for ax, g in zip(axes.flat, shown):
+        times = good.loc[good["script"] == g, "time"].astype(float).to_numpy()
+        nb = int(min(max(np.ceil(np.sqrt(len(times))), 3), 15))
+        counts, edges = np.histogram(times, bins=nb)
+        mids, w = (edges[:-1] + edges[1:]) / 2, (edges[1] - edges[0]) or 1e-3
+        color = _script_color(groups, g)
+        ax.bar(mids, counts, width=w * 0.92, color=color, edgecolor="white", linewidth=0.6)
+        for m_, c_ in zip(mids, counts):
+            if c_:
+                ax.text(m_, c_ + max(counts) * 0.02, str(c_), ha="center", va="bottom", fontsize=8, color=INK)
+        mean = times.mean()
+        ax.axvline(mean, color=AVG_C, ls="--", lw=1.3)
+        if o.threshold is not None and edges[0] <= o.threshold <= edges[-1]:
+            ax.axvline(o.threshold, color="#8e44ad", ls="-.", lw=1.3)
+        ax.set_ylim(0, max(counts) * 1.3)
+        ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+        ax.set_title(f"{script_title(g)}  (avg {mean:.2f} s, {len(times)} runs)", loc="left", fontsize=9,
+                     fontweight="bold", color=INK)
+        ax.set_xlabel("Time taken (Seconds)", fontsize=8)
+        ax.tick_params(labelsize=8)
+        for sp in ("top", "right"):
+            ax.spines[sp].set_visible(False)
+        ax.grid(axis="y", alpha=0.3)
+    for ax in list(axes.flat)[len(shown):]:
+        ax.axis("off")
+    for r in range(rows):
+        axes[r][0].set_ylabel("Number of sessions", fontsize=8)
+    fig.suptitle(f"{title}: distribution of time taken, per script (own time axis each)", x=0.01, ha="left",
+                 fontweight="bold")
+    script_info = script_line(getattr(o, "test_file", ""), "")
+    fig.text(0.01, 1 - 0.55 / (3.6 * rows + 1.2),
+             (f"{script_info}   |   " if script_info else "")
+             + f"Sessions: {len(df)}  (successful: {len(good)}, failed: {int(df['failed'].sum())})   |   "
+             "dashed line = script average", fontsize=9, color="#555", va="top")
+    fig.text(0.01, 0.005, f"Generated: {_now_stamp(tz)}", fontsize=8, color="#666")
+    plt.tight_layout(rect=(0, 0.025, 1, 1 - 0.8 / (3.6 * rows + 1.2)))
     fig.savefig(out)
     plt.close(fig)
 
