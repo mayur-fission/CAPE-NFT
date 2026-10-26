@@ -104,9 +104,11 @@ def load_session_times(path, sheet=0):
     c_stat, c_start, c_end = find("status", "result"), find("start"), find("end")
     # exact header: "Script Runtime (s)" must not match
     c_script = next((c for c in df.columns if str(c).strip().lower() == "script"), None)
+    c_loop = next((c for c in df.columns if str(c).strip().lower() == "loop"), None)
     blank = pd.Series([""] * len(df))
     df = pd.DataFrame({
         "script": (df[c_script] if c_script is not None else blank).fillna("").astype(str).str.strip(),
+        "loop": pd.to_numeric(df[c_loop], errors="coerce") if c_loop is not None else float("nan"),
         "session": df[c_sess],
         "time": pd.to_numeric(df[c_time], errors="coerce"),
         "status": (df[c_stat] if c_stat is not None else blank).fillna("").astype(str).str.lower(),
@@ -140,9 +142,13 @@ def _session_number(name):
 
 
 def script_groups(df):
-    """The scripts of df["script"] by name (unknown last), when the sessions
-    ran more than one script, else [] (no grouping)."""
-    scripts = sorted(set(df["script"]), key=lambda s: (not s, s.lower()))
+    """The scripts of df["script"] by name (unknown last) - or, for the
+    steps of a loop (a Loop column), in the order they first ran - when the
+    sessions ran more than one, else [] (no grouping)."""
+    if "loop" in df and df["loop"].notna().any() and df["start"].notna().any():
+        scripts = list(dict.fromkeys(df.sort_values("start", kind="stable")["script"]))
+    else:
+        scripts = sorted(set(df["script"]), key=lambda s: (not s, s.lower()))
     return scripts if len([s for s in scripts if s]) > 1 else []
 
 
@@ -150,12 +156,17 @@ def script_title(script):
     return script or "(unknown script)"
 
 
-def _bar_labels(sessions, scripts):
-    """Bar labels for grouped charts: the trailing number (short_label())
-    while that is unique within each script; otherwise the session names
-    without the prefix all of them share (e.g. a node prefix "N1_"), with
-    "#2", "#3", ... on repeated runs of one session (e.g. list.files() calls)."""
+def _bar_labels(sessions, scripts, loops=None):
+    """Bar labels for grouped charts: "S<n> L<loop>" when the runs have
+    loop numbers; else the trailing number (short_label()) while that is
+    unique within each script; otherwise the session names without the
+    prefix all of them share (e.g. a node prefix "N1_"), with "#2", "#3",
+    ... on repeated runs of one session (e.g. list.files() calls)."""
     sessions, scripts = [str(s) for s in sessions], list(scripts)
+    loops = [] if loops is None else list(loops)
+    if loops and all(v == v for v in loops):  # no NaN
+        return ["%s L%d" % ("S" + short_label(s) if short_label(s).isdigit() else short_label(s), v)
+                for s, v in zip(sessions, loops)]
     short = [short_label(s) for s in sessions]
     if all(len({l for l, g in zip(short, scripts) if g == grp}) == scripts.count(grp) for grp in set(scripts)):
         return short
@@ -270,7 +281,7 @@ def build_grouped_session_chart(df, out, title, o, groups, tz=REPORT_TZ):
     from matplotlib.transforms import blended_transform_factory
 
     df = _group_sorted(df, groups)
-    labels = _bar_labels(df["session"], df["script"])
+    labels = _bar_labels(df["session"], df["script"], df["loop"])
     times, failed, scripts = df["time"].tolist(), df["failed"].tolist(), df["script"].tolist()
     n = len(df)
 
@@ -306,11 +317,12 @@ def build_grouped_session_chart(df, out, title, o, groups, tz=REPORT_TZ):
     width = min(max(10, per_slot * sum(panel_slots) + 3 + 0.9 * (len(panels) - 1)), 60)
     rows = len(groups) + 2  # header + scripts + all sessions
     table_h = 0.3 * rows + 0.5
+    noun = getattr(o, "group_noun", "script")
     head_lines = _header_lines(df, o, extra=[
-        f"{len(groups)} scripts - sessions grouped by script; compare times within a script"
-        + ("; each script has its own time axis (their times differ more than %gx)" % SEPARATE_PANELS_RATIO
-           if separate else "")
-        + f"   |   Success rate: {n_ok} of {n} ({100.0 * n_ok / n:.1f}%)   |   Failed sessions: {n_fail}"])
+        f"{len(groups)} {noun}s - runs grouped by {noun}; compare times within a {noun}"
+        + (f"; each {noun} has its own time axis (their times differ more than {SEPARATE_PANELS_RATIO:g}x)"
+           if separate else ""),
+        f"Success rate: {n_ok} of {n} ({100.0 * n_ok / n:.1f}%)   |   Failed: {n_fail}"])
     head_h = 0.35 + 0.2 * len(head_lines) + 0.35  # title, lines, legend (inches)
     fig_h = head_h + 6.6 + table_h
     fig = plt.figure(figsize=(width, fig_h), dpi=150)
@@ -386,7 +398,7 @@ def build_grouped_session_chart(df, out, title, o, groups, tz=REPORT_TZ):
         ax.set_xticklabels(p_labels, rotation=0 if len(idx) <= 30 and max(map(len, p_labels)) <= 3 else 90,
                            fontsize=9 if n <= 30 else 7 if n <= 60 else 5)
         ax.set_xlabel("Concurrent session" if separate else
-                      "Concurrent session (Sessions opened in separate browser tab), grouped by R script")
+                      f"Concurrent session (Sessions opened in separate browser tab), grouped by {noun}")
         for s in ("top", "right"):
             ax.spines[s].set_visible(False)
         ax.grid(axis="y", alpha=0.3)
@@ -397,10 +409,10 @@ def build_grouped_session_chart(df, out, title, o, groups, tz=REPORT_TZ):
     fig.text(0.01, top, title, fontsize=12, fontweight="bold", va="top")
     for k, line in enumerate(head_lines):
         fig.text(0.01, top - (0.3 + 0.2 * k) / fig_h, line, fontsize=9, color="#555", va="top")
-    marks = [Line2D([], [], color=AVG_C, ls="--", lw=1.3, label="Script average"),
-             Line2D([], [], marker="^", ls="none", color=INK, mec=INK, ms=7, label="Slowest of its script"),
+    marks = [Line2D([], [], color=AVG_C, ls="--", lw=1.3, label=f"{noun.capitalize()} average"),
+             Line2D([], [], marker="^", ls="none", color=INK, mec=INK, ms=7, label=f"Slowest of its {noun}"),
              Line2D([], [], marker="v", ls="none", color="white", mec=INK, mew=1.2, ms=7,
-                    label="Fastest of its script")]
+                    label=f"Fastest of its {noun}")]
     if n_fail:
         marks.append(Patch(facecolor=FAIL_C, hatch="///", edgecolor="white", label="Failed session"))
     fig.legend(handles=marks, loc="upper left", bbox_to_anchor=(0.005, top - (0.3 + 0.2 * len(head_lines)) / fig_h),
@@ -414,8 +426,8 @@ def build_grouped_session_chart(df, out, title, o, groups, tz=REPORT_TZ):
 
     # comparing scripts' averages only makes sense on a shared time axis
     fastest = None if separate else min((per[g]["mean"] for g in groups if "mean" in per[g]), default=None)
-    head = ["Script", "Sessions", "Failed", "Average (s)", "Median (s)", "Min (s)", "Max (s)",
-            "Std dev (s)", "P95 (s)", "Max - min (s)"] + (["Average vs fastest script"] if fastest else [])
+    head = [noun.capitalize(), "Runs", "Failed", "Average (s)", "Median (s)", "Min (s)", "Max (s)",
+            "Std dev (s)", "P95 (s)", "Max - min (s)"] + ([f"Average vs fastest {noun}"] if fastest else [])
     cells, fills = [], []
     for g in groups:
         p = per[g]
@@ -428,7 +440,7 @@ def build_grouped_session_chart(df, out, title, o, groups, tz=REPORT_TZ):
         else:
             cells.append([script_title(g), p["sessions"], p["failed"], "all failed"] + ["-"] * (len(head) - 4))
         fills.append(_tint(_script_color(groups, g), 0.22))
-    cells.append(["All sessions (mixed scripts)", n, n_fail, f"{overall['mean']:.2f}", f"{overall['median']:.2f}",
+    cells.append([f"All runs (mixed {noun}s)", n, n_fail, f"{overall['mean']:.2f}", f"{overall['median']:.2f}",
                   f"{vmin:.2f}", f"{vmax:.2f}", f"{overall['std']:.2f}", f"{overall['p95']:.2f}",
                   f"{vmax - vmin:.2f}"] + ([""] if fastest else []))
     fills.append("#f2f2f2")
@@ -599,7 +611,7 @@ def build_session_chart(df, out, title, o, sort="session", tz=REPORT_TZ):
                 **({"above_threshold": over_thr} if thr is not None else {}))
 
 
-def build_timeline_chart(df, out, title, tz=REPORT_TZ, script="", test_file=""):
+def build_timeline_chart(df, out, title, tz=REPORT_TZ, script="", test_file="", group_noun="script"):
     """Chart 2: one horizontal bar per session, from its start to its end
     time, so the overlap (concurrency) between sessions is visible. Every
     session gets a row: a failed one is drawn in red with "FAIL - <status>"
@@ -620,7 +632,8 @@ def build_timeline_chart(df, out, title, tz=REPORT_TZ, script="", test_file=""):
     off = (started["start"] - t0).dt.total_seconds().tolist() + [0.0] * len(not_started)
     dur = (started["end2"] - started["start"]).dt.total_seconds().tolist() + [0.0] * len(not_started)
     groups = script_groups(df)
-    labels = ([f"{l}  {script_title(g)}" for l, g in zip(_bar_labels(d["session"], d["script"]), d["script"])]
+    labels = ([f"{l}  {script_title(g)}" for l, g in zip(_bar_labels(d["session"], d["script"], d["loop"]),
+                                                          d["script"])]
               if groups else [short_label(s) for s in d["session"]])
     failed = d["failed"].tolist()
     times = d["time"].tolist()
@@ -674,7 +687,7 @@ def build_timeline_chart(df, out, title, tz=REPORT_TZ, script="", test_file=""):
     ax.set_xlim(-total * 0.01, total * (1.3 if any(failed) else 1.02))
     ax.set_xlabel(f"Seconds since first session started "
                   f"({t0.strftime('%d %b %Y, %H:%M:%S')}, timestamps as recorded in the data)")
-    ax.set_ylabel("Concurrent session" + ("  and its R script" if groups else "")
+    ax.set_ylabel("Concurrent session" + (f"  and its {group_noun}" if groups else "")
                   + "\n(Sessions opened in separate browser tab)")
     ax.grid(axis="x", alpha=0.3)
     for s in ("top", "right"):
@@ -778,20 +791,22 @@ def _build_grouped_histogram_chart(df, out, title, o, groups, tz=REPORT_TZ):
         if c_:
             ax.text(m_, c_ + top * 0.01, f"{c_:.0f}", ha="center", va="bottom", fontsize=9, color=INK)
     handles = _script_handles(Patch, groups, with_failed=False) + [
-        Line2D([], [], marker="^", ls="none", color="white", mec=INK, ms=9, label="Script average")]
+        Line2D([], [], marker="^", ls="none", color="white", mec=INK, ms=9,
+               label="%s average" % getattr(o, "group_noun", "script").capitalize())]
     if o.threshold is not None:
         ax.axvline(o.threshold, ymax=0.68, color="#8e44ad", ls="-.", lw=1.5)
         handles.append(Line2D([], [], color="#8e44ad", ls="-.", lw=1.5, label=f"Threshold {o.threshold:g} seconds"))
     ax.set_ylim(0, top * 1.75)
     ax.set_xlabel("Time taken to execute script (Seconds)")
     ax.set_ylabel("Number of sessions")
-    ax.set_title(f"{title}: distribution of time taken by R script", loc="left", fontweight="bold")
+    noun = getattr(o, "group_noun", "script")
+    ax.set_title(f"{title}: distribution of time taken by {noun}", loc="left", fontweight="bold")
     # beside the axes: the info text spans the top of them
     ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(1.01, 1), fontsize=9, frameon=False)
     script_info = script_line(getattr(o, "test_file", ""), "")  # the legend names the scripts
     ax.text(0.01, 0.97, (f"{script_info}\n" if script_info else "") +
             f"Sessions: {len(df)}  (successful: {len(ok)}, failed: {int(df['failed'].sum())})\n"
-            f"Each bar = sessions whose time falls in a {w:.2f}-second range, split by R script",
+            f"Each bar = sessions whose time falls in a {w:.2f}-second range, split by {noun}",
             transform=ax.transAxes, va="top", fontsize=9, color="#555")
     for sp in ("top", "right"):
         ax.spines[sp].set_visible(False)
@@ -840,13 +855,14 @@ def _build_histogram_per_script(df, out, title, o, groups, tz=REPORT_TZ):
         ax.axis("off")
     for r in range(rows):
         axes[r][0].set_ylabel("Number of sessions", fontsize=8)
-    fig.suptitle(f"{title}: distribution of time taken, per script (own time axis each)", x=0.01, ha="left",
+    noun = getattr(o, "group_noun", "script")
+    fig.suptitle(f"{title}: distribution of time taken, per {noun} (own time axis each)", x=0.01, ha="left",
                  fontweight="bold")
     script_info = script_line(getattr(o, "test_file", ""), "")
     fig.text(0.01, 1 - 0.55 / (3.6 * rows + 1.2),
              (f"{script_info}   |   " if script_info else "")
              + f"Sessions: {len(df)}  (successful: {len(good)}, failed: {int(df['failed'].sum())})   |   "
-             "dashed line = script average", fontsize=9, color="#555", va="top")
+             f"dashed line = {noun} average", fontsize=9, color="#555", va="top")
     fig.text(0.01, 0.005, f"Generated: {_now_stamp(tz)}", fontsize=8, color="#666")
     plt.tight_layout(rect=(0, 0.025, 1, 1 - 0.8 / (3.6 * rows + 1.2)))
     fig.savefig(out)
@@ -886,7 +902,19 @@ def build_replicates_chart(timings_path, out, title, o, tz=REPORT_TZ):
     ylo = max(0, vmin - span * 0.6)
     yhi = vmax + span * 0.6
 
-    width = min(max(9, 0.24 * n + 3), 60)
+    chart_title = f"{title}: replicates completed per session"
+    # Only the scripts on this chart: often just the one that writes a run
+    # summary, while the test ran several.
+    shown_scripts = ", ".join(dict.fromkeys(s for s in df["script"] if s)) or getattr(o, "script", "")
+    info = [line for line in (
+        script_line(getattr(o, "test_file", ""), shown_scripts),
+        f"Sessions: {n}   |   Total: {sum(reps):.0f}   |   "
+        + ("" if groups else f"Min {vmin:.0f} (green)   Max {vmax:.0f} (orange)   |   ")
+        + f"Spread: {100.0 * (vmax - vmin) / vmax:.1f}% of max") if line]
+    # wide enough for the title and header lines (~0.1 in per 12 pt bold
+    # character, ~0.07 in per 9 pt one), else tight_layout cannot fit them
+    text_w = max(len(chart_title) * 0.1, max(len(line) for line in info) * 0.07) + 1.5
+    width = min(max(9, 0.24 * n + 3, text_w), 60)
     fig, ax = plt.subplots(figsize=(width, 6.8), dpi=150)
     ax.bar(range(n), [v - ylo for v in reps], bottom=ylo, color=colors, width=0.8 if n > 40 else 0.75)
     lab_fs = 8 if n <= 30 else 7 if n <= 60 else 6 if n <= 120 else 5
@@ -903,12 +931,8 @@ def build_replicates_chart(timings_path, out, title, o, tz=REPORT_TZ):
     ax.set_xticklabels(labels, rotation=0 if n <= 30 else 90, fontsize=lab_fs + 1)
     ax.set_xlabel("Concurrent session (Sessions opened in separate browser tab)")
     ax.set_ylabel("Replicates completed" + (f"  (axis starts at {ylo:.0f})" if ylo > 0 else ""))
-    ax.set_title(f"{title}: replicates completed per session", loc="left", fontweight="bold", pad=22)
-    script_info = script_line(getattr(o, "test_file", ""), getattr(o, "script", ""))
-    ax.text(0, 1.008, (f"{script_info}   |   " if script_info else "") +
-            f"Sessions: {n}   |   Total: {sum(reps):.0f}   |   Min {vmin:.0f} (green)   "
-            f"Max {vmax:.0f} (orange)   |   Spread: {100.0 * (vmax - vmin) / vmax:.1f}% of max",
-            transform=ax.transAxes, ha="left", va="bottom", fontsize=9, color="#555")
+    ax.set_title(chart_title, loc="left", fontweight="bold", pad=10 + 13 * len(info))
+    ax.text(0, 1.008, "\n".join(info), transform=ax.transAxes, ha="left", va="bottom", fontsize=9, color="#555")
     ax.legend(handles=_script_handles(Patch, groups, with_failed=False) if groups else [
                   Patch(color=MIN_C, label="Fewest replicates"), Patch(color=MAX_C, label="Most replicates"),
                   Patch(color=BAR, label="Other sessions")], loc="upper right", fontsize=8, frameon=False)
@@ -925,13 +949,15 @@ def build_replicates_chart(timings_path, out, title, o, tz=REPORT_TZ):
 
 def generate_session_time_report(timings_path, title="Time taken per concurrent session", threshold=None,
                                  test_name="", environment="", browser="", notes="", sort="session",
-                                 tz=REPORT_TZ, attach=True, script="", test_file=None):
+                                 tz=REPORT_TZ, attach=True, script="", test_file=None, group_noun="script"):
     """Build the session, histogram and timeline charts from `timings_path`
     as <timings_path without extension>.png / _histogram.png / _timeline.png
     (plus _replicates.png when the CSV has a Replicates column) and attach
     them to Allure (when `attach`). `script` (the R script the
     sessions ran) is shown as "Path" in the header of all three, next to
-    "Script name": `test_file`, by default the running test's file. Returns
+    "Script name": `test_file`, by default the running test's file.
+    `group_noun` names what the CSV's Script column holds on the grouped
+    charts (e.g. "step" for file steps). Returns
     the stats dict (plus "charts": the PNG paths), or None if the report
     could not be made.
     Never raises.
@@ -945,7 +971,7 @@ def generate_session_time_report(timings_path, title="Time taken per concurrent 
         print("\n[rstudio-local] session time report skipped (%s); pip install pandas numpy matplotlib" % exc)
         return None
     o = SimpleNamespace(threshold=threshold, test_name=test_name, environment=environment,
-                        browser=browser, notes=notes, script=script,
+                        browser=browser, notes=notes, script=script, group_noun=group_noun,
                         test_file=_running_test_file() if test_file is None else test_file)
     base = os.path.splitext(timings_path)[0]
     charts = []
@@ -957,7 +983,7 @@ def generate_session_time_report(timings_path, title="Time taken per concurrent 
         build_histogram_chart(df, base + "_histogram.png", title, o, tz=tz)
         charts.append(base + "_histogram.png")
         timeline = build_timeline_chart(df, base + "_timeline.png", title, tz=tz, script=script,
-                                        test_file=o.test_file)
+                                        test_file=o.test_file, group_noun=group_noun)
         if timeline:
             result.update(timeline)
             charts.append(base + "_timeline.png")
@@ -992,10 +1018,12 @@ def main():
     p.add_argument("--notes", default="", help="free text, shown in the header")
     p.add_argument("--script", default="", help="path of the R script the sessions ran, shown on every chart")
     p.add_argument("--test-file", default="", help="test file that ran it (Script name), shown on every chart")
+    p.add_argument("--group-noun", default="script",
+                   help="what the Script column holds, on the grouped charts (e.g. step)")
     a = p.parse_args()
     r = generate_session_time_report(a.input, a.title, a.threshold, a.test_name, a.environment, a.browser,
                                      a.notes, a.sort, a.tz, attach=False, script=a.script,
-                                     test_file=a.test_file)
+                                     test_file=a.test_file, group_noun=a.group_noun)
     if r is None:
         raise SystemExit(1)
     for k, v in r.items():
