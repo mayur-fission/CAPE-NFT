@@ -1,12 +1,16 @@
 """Text files in the editor.
 
 Flow: File > New File > Text File -> type -> Ctrl+S -> Save File dialog
+      edit: type at the end of the open tab -> Ctrl+S
+      open: file.edit() -> the editor shows the file
+      delete: file.remove() -> the file is gone
 """
 import re
 import time
 from collections import namedtuple
 
 from common import locators
+from common.rstudio_console_commands import r_string, read_console_value, read_text_file, submit_console_command
 
 AUTO_TEXT_FILE_PREFIX = "Text_"
 _AUTO_TEXT_FILE_RE = re.compile(re.escape(AUTO_TEXT_FILE_PREFIX) + r"(\d+)")
@@ -136,3 +140,69 @@ def create_text_file(page, content=None, folder=None, file_name=None, timeout_ms
     open_new_text_tab(page, timeout_ms=timeout_ms)
     type_in_active_tab(page, content or DEFAULT_TEXT_FILE_CONTENT, timeout_ms=timeout_ms)
     return save_file(page, folder=folder, file_name=file_name, timeout_ms=timeout_ms)
+
+
+def _wait_until(page, check, what, timeout_ms, poll_ms=500):
+    """Poll `check()` until it is true; raises RuntimeError naming `what`
+    after timeout_ms."""
+    deadline = time.time() + timeout_ms / 1000.0
+    while True:
+        if check():
+            return
+        if time.time() >= deadline:
+            raise RuntimeError("%s within %dms" % (what, timeout_ms))
+        page.wait_for_timeout(poll_ms)
+
+
+def append_and_save_active_tab(page, content, path, timeout_ms=30000):
+    """Edit the active tab - already saved as `path` on the server: go to its
+    end, type a new line with `content` and save it (Ctrl+S, no dialog as
+    the file has a name). Returns the seconds from Ctrl+S until the file on
+    the server ends with `content`.
+    """
+    editor_input = _active_editor_input(page, timeout_ms)
+    if editor_input is None:
+        raise RuntimeError("no active editor tab found to edit")
+    editor_input.click(force=True)
+    page.keyboard.press("Control+End")
+    page.keyboard.type("\n" + content)
+    started = time.time()
+    page.keyboard.press("Control+s")
+    _wait_until(page, lambda: (read_text_file(page, path) or "").rstrip().endswith(content),
+                "%s was not saved with the edit" % path, timeout_ms)
+    return time.time() - started
+
+
+def open_file_in_editor(page, path, timeout_ms=30000):
+    """Open the file `path` in the editor (file.edit()) and wait until it is
+    the active, visible editor tab. Returns (elapsed_s, lines): the seconds
+    from submitting file.edit() until then, and the lines the editor shows.
+    """
+    started = time.time()
+    submit_console_command(page, "file.edit(%s)" % r_string(path))
+    same_file = ("isTRUE(normalizePath(.rs.api.getSourceEditorContext()$path, mustWork = FALSE) == "
+                 "normalizePath(%s, mustWork = FALSE))" % r_string(path))
+    _wait_until(page, lambda: _active_editor_input(page, 1000) is not None
+                and read_console_value(page, same_file, 10000) == "TRUE",
+                "%s did not open in the editor" % path, timeout_ms)
+    elapsed = time.time() - started
+    # one line per editor line, joined with a separator the console keeps on one line
+    shown = read_console_value(
+        page, "paste(.rs.api.getSourceEditorContext()$contents, collapse = '%s')" % _LINE_SEPARATOR, timeout_ms)
+    return elapsed, shown.split(_LINE_SEPARATOR)
+
+
+_LINE_SEPARATOR = "@@LINE@@"
+
+
+def delete_file(page, path, timeout_ms=30000):
+    """Delete the file `path` on the server (file.remove()) and check it is
+    gone. Returns the seconds taken; raises RuntimeError if it still exists.
+    """
+    started = time.time()
+    removed = read_console_value(page, "file.remove(%s)" % r_string(path), timeout_ms)
+    if removed != "TRUE":
+        raise RuntimeError("file.remove(%s) returned %s" % (path, removed))
+    _wait_until(page, lambda: read_console_value(page, "file.exists(%s)" % r_string(path), timeout_ms) == "FALSE",
+                "%s still exists after deleting it" % path, timeout_ms)
+    return time.time() - started
