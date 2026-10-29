@@ -305,10 +305,14 @@ repeat {
   # REMOVE PREVIOUS PLOT OBJECT
   # ----------------------------------------------------------
   
+  # if (exists("p_live")) {
+  #   rm(p_live)
+  # }
   if (exists("p_live")) {
-    rm(p_live)
+    ggsave(PLOT_FILE, p_live, width = 8, height = 5)
+  } else {
+    message("p_live not found: final plot was not saved.")
   }
-  
   # ----------------------------------------------------------
   # CREATE ANNOTATION TEXT
   # ----------------------------------------------------------

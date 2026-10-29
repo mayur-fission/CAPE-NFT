@@ -56,6 +56,8 @@ PMT_10MIN_SESSION_PREFIX = "PMT_10MIN_"
 # Close-tab tests (test_run_r_close_browser, ..._batch_execution)
 RUN_R_CLOSE_SESSION_PREFIX = "RUN_R_CLOSE_SESSION_"
 BATCH_RUN_R_CLOSE_SESSION_PREFIX = "BATCH_RUN_R_CLOSE_SESSION_"
+# test_cleanup_leftover_testdata (deletes the files and folders tests leave)
+CLEANUP_SESSION_PREFIX = "CLEANUP_SESSION_"
 
 # Every prefix the UI tests name their sessions with, so a teardown that is
 # given no exact names only quits sessions a test could have created, not
@@ -75,7 +77,7 @@ ALL_SESSION_NAME_PREFIXES = (AUTO_PERF_NAME_PREFIX, RUN_R_SESSION_NAME_PREFIX, U
                              TIDYVERSE_GGPLOT_10MIN_SESSION_PREFIX, PMT_10MIN_SESSION_PREFIX,
                              RUN_R_CLOSE_SESSION_PREFIX, BATCH_RUN_R_CLOSE_SESSION_PREFIX, FILE_CRUD_SESSION_PREFIX,
                              LOAD_FILES_SESSION_PREFIX, BACKGROUND_JOB_SESSION_PREFIX, CONCURRENT_IDLE_SESSION_PREFIX,
-                             SCENARIO_1_SESSION_PREFIX)
+                             SCENARIO_1_SESSION_PREFIX, CLEANUP_SESSION_PREFIX)
 
 
 def user_session_name_prefix(user):

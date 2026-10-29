@@ -106,3 +106,16 @@ WORKBENCH_JOB_ENVIRONMENT_LOADED_TEXT = "Current Environment"
 WORKBENCH_JOB_FINAL_STATES = ("Finished", "Succeeded", "Failed", "Canceled", "Killed")
 WORKBENCH_JOB_FAILED_STATES = ("Failed", "Canceled", "Killed")
 WORKBENCH_JOB_ANY_STATES = ("Pending", "Running") + WORKBENCH_JOB_FINAL_STATES
+
+# --- Files pane (common/files_pane.py) -------------------------------------
+# Each file/folder row has a checkbox and its name as text. Delete asks
+# "Confirm Delete" with Yes/No buttons.
+FILES_TAB_SELECTOR = "#rstudio_workbench_tab_files"
+FILES_PANEL_SELECTOR = "#rstudio_workbench_panel_files"
+FILES_ROW_SELECTOR = "tr"
+FILES_ROW_CHECKBOX_SELECTOR = "input[type='checkbox']"
+FILES_DELETE_BUTTON_SELECTOR = "#rstudio_tb_deletefiles"
+# Fallback when the Delete button has no id
+FILES_DELETE_BUTTON = "Delete"
+FILES_DELETE_CONFIRM_YES_SELECTOR = "#rstudio_dlg_yes"
+FILES_DELETE_CONFIRM_YES_BUTTON = "Yes"

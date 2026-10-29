@@ -129,13 +129,18 @@ TEST_FILES = [
     'test_delete_sessions'                              :
         'Housekeeping: quit every AUTO_PERF_SESSION_* session (bulk Quit) - also ones another running test is ' +
         'using',
+    'test_cleanup_leftover_testdata'                    :
+        'Housekeeping: one CLEANUP_SESSION_<N> session deletes the files and folders tests leave (session-named ' +
+        'folders, pmx_sim_output*, auto_test text files) through the Files pane, then force-quits it. Only when ' +
+        'ticked, never with RUN_ALL - it also deletes data a running test is using',
 ]
 TEST_NAMES = new ArrayList(TEST_FILES.keySet())
 // Copies of other tests under U1_ session names, for running next to them as
 // the same user: only when ticked, never with RUN_ALL (that would double the
-// concurrent-session load).
+// concurrent-session load). The data cleanup too: it would delete data the
+// other tests are still using.
 RUN_ALL_SKIPS = ['test_concurrent_sessions_u1', 'test_concurrent_sessions_10min_u1',
-                 'test_concurrent_sessions_30min_u1']
+                 'test_concurrent_sessions_30min_u1', 'test_cleanup_leftover_testdata']
 RUN_ALL_TESTS = TEST_NAMES.findAll { !(it in RUN_ALL_SKIPS) }
 // The test USE_EC2_NODES spreads over the NODE_LABELS agents.
 MULTI_NODE_TEST = 'test_create_session_through_ui_and_run_script_group_multi_browser'
