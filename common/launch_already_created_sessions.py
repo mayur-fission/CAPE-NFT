@@ -81,7 +81,7 @@ def launch_already_created_sessions(context, home_url, session_names=None, timeo
     ]
 
 
-def prepare_session_folders(launched, working_dir=None, per_session_dir=False):
+def prepare_session_folders(launched, working_dir=None, per_session_dir=False, session_folders=None):
     """The per-session setup of run_script_in_launched_sessions(), on its own
     so a caller can do it before the scripts start (e.g. before waiting for
     other browsers) and then start them all within seconds: in each session
@@ -89,7 +89,8 @@ def prepare_session_folders(launched, working_dir=None, per_session_dir=False):
     if neither is set), or with per_session_dir to its own
     `working_dir`/<session name> folder (emptied first: data left there by an
     earlier run is deleted, see recreate_session_folder()), with
-    SETWD_ATTEMPTS tries.
+    SETWD_ATTEMPTS tries. `session_folders` ({session name: folder name})
+    names a session's folder other than after the session.
 
     Returns {session name: (session folder or None, error or None)} for the
     sessions that opened; pass it to run_script_in_launched_sessions(prepared=...).
@@ -100,11 +101,12 @@ def prepare_session_folders(launched, working_dir=None, per_session_dir=False):
     for session in launched:
         if session.error:
             continue
-        session_dir = posixpath.join(working_dir, session.session_name) if per_session_dir else None
+        folder = (session_folders or {}).get(session.session_name, session.session_name)
+        session_dir = posixpath.join(working_dir, folder) if per_session_dir else None
         for attempt in range(1, SETWD_ATTEMPTS + 1):
             try:
                 if session_dir:
-                    recreate_session_folder(session.page, working_dir, session.session_name)
+                    recreate_session_folder(session.page, working_dir, folder)
                 if set_session_working_directory(session.page, path=session_dir or working_dir):
                     log_step("Working directory set to %s in session %s%s", session_dir or working_dir,
                              session.session_name, " (the script's output goes here)" if session_dir else "")
@@ -125,7 +127,8 @@ def prepare_session_folders(launched, working_dir=None, per_session_dir=False):
 
 def run_script_in_launched_sessions(launched, script_path, working_dir=None, timeout_ms=1800000,
                                     poll_interval_ms=500, output_path=None, per_session_dir=False,
-                                    delete_output=False, on_poll=None, prepared=None, summary_file=None):
+                                    delete_output=False, on_poll=None, prepared=None, summary_file=None,
+                                    after_run=None):
     """In each session from launch_already_created_sessions(), setwd to
     `working_dir` (default RSTUDIO_WORKING_DIR; skipped if neither is set),
     or with per_session_dir to its own `working_dir`/<session name> folder
@@ -148,7 +151,10 @@ def run_script_in_launched_sessions(launched, script_path, working_dir=None, tim
     record first (read_run_summary()), before the output is deleted; without
     it, a run summary the script printed to its console is read instead
     (check_console_run_summary()). Either way a summary showing the script
-    stopped on an error, or fitted no study, fails the run.
+    stopped on an error, or fitted no study, fails the run. `after_run`, if
+    given, is called as after_run(page, record) once a session's script has
+    finished, before its output is checked (e.g. to read more figures into
+    the record); it runs in the browser's thread, so keep Allure out of it.
 
     Returns one run record per session (see common.script_timings); sessions
     that failed to open are recorded as such.
@@ -176,6 +182,8 @@ def run_script_in_launched_sessions(launched, script_path, working_dir=None, tim
             read_run_summary(page, record, summary_file)
         else:
             check_console_run_summary(page, record)
+        if after_run is not None:
+            after_run(page, record)
         if output_path:
             check_output_file(page, record, output_path, delete=delete_output, remove_dir=session_dir)
 

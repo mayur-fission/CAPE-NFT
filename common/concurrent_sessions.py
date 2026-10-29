@@ -62,7 +62,8 @@ def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, u
                                       browser_count, label, script_path, output_dir, output_file_name,
                                       script_timeout_ms, stagger_s=0, attempts=3, launch_timeout_ms=180000,
                                       retry_wait_s=15, delete_output=False, poll_interval_ms=500,
-                                      start_together=True, summary_file=None):
+                                      start_together=True, summary_file=None, session_folders=None,
+                                      after_run=None):
     """Run `script_path` in `session_names` spread over `browser_count`
     browsers (started `stagger_s` apart), each run timed. `script_path` can
     also be {session name: script path}, a script of its own per session.
@@ -80,6 +81,10 @@ def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, u
     summary_file: the script's run summary (relative to its session folder),
     whose figures (replicates, ...) go into each run record - see
     run_script_in_launched_sessions().
+    session_folders: {session name: folder name} under `output_dir`, for
+    folders not named after their session.
+    after_run: called as after_run(page, record) once a session's script has
+    finished - see run_script_in_launched_sessions().
     Returns (runs, errors): run records, "browser <B>: <error>" per failure.
     """
     log_step("Starting %s: R script %s in %d session(s) over %d browser(s), as user %d",
@@ -119,7 +124,8 @@ def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, u
             context, prefix, names_by_browser[prefix], user, "%s %s" % (label, prefix.rstrip("_")),
             ready, progress, launch_failed, attempts, launch_timeout_ms, retry_wait_s,
             script_path, output_dir, output_file_name, script_timeout_ms, delete_output, poll_interval_ms,
-            start_together, cleanup_wait_s, cleanup, summary_file, start_delays[prefix],
+            start_together, cleanup_wait_s, cleanup, summary_file, start_delays[prefix], session_folders,
+            after_run,
         )
 
     results = run_in_parallel_browsers(
@@ -157,7 +163,7 @@ def _run_script_in_browser(context, prefix, session_names, user, label, ready, p
                            attempts, launch_timeout_ms, retry_wait_s, script_path, output_dir,
                            output_file_name, script_timeout_ms, delete_output=False, poll_interval_ms=500,
                            start_together=True, cleanup_wait_s=3600, cleanup=None, summary_file=None,
-                           start_delay_s=0):
+                           start_delay_s=0, session_folders=None, after_run=None):
     """One browser's part of run_script_in_concurrent_sessions(); a browser
     whose launch fails adds its prefix to `launch_failed`. Each stage is
     recorded in `progress` (a BrowserProgress), which also holds the wait
@@ -204,7 +210,8 @@ def _run_script_in_browser(context, prefix, session_names, user, label, ready, p
             # that afterwards the scripts are only submitted and start within
             # seconds of each other in every browser.
             progress.set(prefix, "preparing the session folders")
-            prepared = prepare_session_folders(launched, output_dir, per_session_dir=True)
+            prepared = prepare_session_folders(launched, output_dir, per_session_dir=True,
+                                               session_folders=session_folders)
         except Exception:
             launch_failed.add(prefix)
             raise
@@ -233,6 +240,7 @@ def _run_script_in_browser(context, prefix, session_names, user, label, ready, p
             launched, script_path, working_dir=output_dir, timeout_ms=script_timeout_ms,
             output_path=output_file_name, per_session_dir=True, delete_output=delete_output,
             poll_interval_ms=poll_interval_ms, prepared=prepared, summary_file=summary_file,
+            after_run=after_run,
         )
         failures = report_failed_runs(runs, label, started)
         assert not failures, "runs that did not finish: %s" % failures
