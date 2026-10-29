@@ -58,3 +58,32 @@ def get_background_job_state(page, job_id, timeout_ms=15000):
         % (r_id, r_id)
     )
     return read_console_value(page, r_expr, timeout_ms)
+
+
+# States of a background job that has not ended yet.
+BACKGROUND_JOB_ACTIVE_STATES = ("idle", "running")
+
+
+def stop_background_job(page, job_id, timeout_ms=60000, poll_s=2):
+    """Stop background job `job_id` (as its Stop button does) and wait until
+    RStudio no longer reports it as running. Returns its final state
+    (usually "cancelled"); raises RuntimeError if it cannot be stopped.
+    """
+    show_console(page)
+    r_id = r_string(job_id)
+    r_expr = (
+        "{tryCatch({.rs.api.stopJob(%s); 'sent'}, error = function(e) tryCatch("
+        "{.rs.api.executeJobAction(%s, 'stop'); 'sent'}, error = function(e) conditionMessage(e)))}"
+        % (r_id, r_id)
+    )
+    answer = read_console_value(page, r_expr)
+    if answer != "sent":
+        raise RuntimeError("could not stop background job %s: %s" % (job_id, answer))
+    deadline = time.time() + timeout_ms / 1000.0
+    while True:
+        state = get_background_job_state(page, job_id)
+        if state not in BACKGROUND_JOB_ACTIVE_STATES:
+            return state
+        if time.time() >= deadline:
+            raise RuntimeError("background job %s still %s %ds after the stop" % (job_id, state, timeout_ms // 1000))
+        time.sleep(poll_s)

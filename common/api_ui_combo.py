@@ -532,14 +532,19 @@ class ListFilesLoop:
     answered, wait `interval_s` and send it again, until `deadline`.
     Call tick() regularly (e.g. as the on_poll of
     run_script_in_launched_sessions()), then run_until_deadline() to keep
-    going until the end. Each call is one record in `records`.
+    going until the end. Each call is one record in `records`; with
+    `script`, the records also get "script" = `script` and "loop" = the
+    call's number in its session (for the session time report). `command`
+    replaces list.files(`path`).
     """
 
-    def __init__(self, sessions, path, deadline, interval_s=30):
+    def __init__(self, sessions, path, deadline, interval_s=30, command=None, script=None):
         self.deadline = deadline
         self.interval_s = interval_s
         self.records = []
-        self.command = "list.files(%s)" % r_string(path)
+        self.command = command or "list.files(%s)" % r_string(path)
+        self.script = script
+        self.calls = {session: 0 for session in sessions}
         # session -> (marker, record) while a call is in flight, else None
         self.in_flight = {session: None for session in sessions}
         self.next_due = {session: time.time() for session in sessions}
@@ -554,6 +559,9 @@ class ListFilesLoop:
                 self._check(session, *pending)
             elif self.next_due[session] <= now < self.deadline:
                 record = new_run_record(session.session_name)
+                if self.script:
+                    self.calls[session] += 1
+                    record.update(script=self.script, loop=self.calls[session])
                 self.records.append(record)
                 try:
                     marker, record["started"] = submit_console_command(session.page, self.command)
@@ -563,14 +571,14 @@ class ListFilesLoop:
                         self.captured.add(session)
                         save_screenshot(session.page, "console_input_%s.png" % session.session_name)
                 except Exception as exc:
-                    record["status"] = "list.files failed: %s" % exc
+                    record["status"] = "%s failed: %s" % (self.command, exc)
                     self.next_due[session] = now + self.interval_s
 
     def _check(self, session, marker, record):
         try:
             done = is_console_command_done(session.page, marker)
         except Exception as exc:
-            record["status"] = "list.files failed: %s" % exc
+            record["status"] = "%s failed: %s" % (self.command, exc)
             done = True
         else:
             if done:

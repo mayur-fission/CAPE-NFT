@@ -35,6 +35,11 @@ R_PACKAGES_SNAPSHOT = env("R_PACKAGES_SNAPSHOT", "2025-03-31")
 # Repository to install from when R_PACKAGES_REPO is blank and R has none set
 # (getOption("repos") is "@CRAN@", which would open RStudio's mirror chooser).
 FALLBACK_REPO = "https://cloud.r-project.org"
+# false (default): a package counts as missing only when it is not installed,
+# so installed packages are never reinstalled. true: also when its installed
+# version differs from R_PACKAGES_REPO's (keeps e.g. the nlmixr2 family on one
+# release, at the cost of reinstalling them).
+CHECK_VERSIONS = env("R_PACKAGES_CHECK_VERSIONS", "false").lower() == "true"
 SETUP_LAUNCH_TIMEOUT_MS = int(env("CONCURRENT_SESSIONS_LAUNCH_TIMEOUT_MS", "180000"))
 
 # The R packages each 10-minute workload script needs (test_<name>_10min and
@@ -71,12 +76,14 @@ def _repo_expr():
             % (r_string(R_PACKAGES_SNAPSHOT), os_release))
 
 
-def missing_r_packages(page, packages):
+def missing_r_packages(page, packages, check_versions=None):
     """The ones of `packages` not installed in any library of the session
-    on `page` - or, with R_PACKAGES_REPO set, installed in a version other
-    than that repository's (install.packages() keeps a dependency that is
-    already there, however old, so a mixed set would otherwise stay mixed)."""
-    if R_PACKAGES_REPO:
+    on `page`. With check_versions (default R_PACKAGES_CHECK_VERSIONS) and
+    R_PACKAGES_REPO set, also those installed in a version other than that
+    repository's (install.packages() keeps a dependency that is already
+    there, however old, so a mixed set would otherwise stay mixed)."""
+    check_versions = CHECK_VERSIONS if check_versions is None else check_versions
+    if check_versions and R_PACKAGES_REPO:
         # (available.packages() downloads the repository's package index)
         expr = ("(function(ap) Filter(function(p) !nzchar(system.file(package=p)) || "
                 "isTRUE(as.character(packageVersion(p)) != ap[match(p, rownames(ap)), 'Version']), %s))"
@@ -95,9 +102,13 @@ def ensure_r_packages(page, packages, timeout_ms=INSTALL_TIMEOUT_MS):
     it installed; raises RuntimeError if any are still missing afterwards."""
     missing = missing_r_packages(page, packages)
     if not missing:
-        log_step("R packages already installed: %s", ", ".join(packages))
+        log_step("R packages already installed: %s - nothing to install", ", ".join(packages))
         return []
-    log_step("R packages missing or not the repository's version: %s - installing them (with their dependencies) from %s",
+    installed = [p for p in packages if p not in missing]
+    if installed:
+        log_step("R packages already installed (left as they are): %s", ", ".join(installed))
+    log_step("R packages %s: %s - installing only those (with their dependencies) from %s",
+             "missing or not the repository's version" if CHECK_VERSIONS else "not installed",
              ", ".join(missing), {"": "the session's repository",
                                   "auto": "the %s snapshot's Linux binaries" % R_PACKAGES_SNAPSHOT,
                                   }.get(R_PACKAGES_REPO.lower(), R_PACKAGES_REPO))
@@ -122,7 +133,9 @@ def ensure_r_packages(page, packages, timeout_ms=INSTALL_TIMEOUT_MS):
         % (_LIB, unlock, repos, _r_vector(missing)),
         timeout_ms=timeout_ms, poll_interval_ms=5000,
     )
-    still = missing_r_packages(page, missing)
+    # Installed now is enough: a dependency install.packages() kept at an
+    # older version must not fail the setup
+    still = missing_r_packages(page, missing, check_versions=False)
     if still:
         raise RuntimeError("R packages still not installed after install.packages() (see its output in the "
                            "console screenshot): %s" % ", ".join(still))
