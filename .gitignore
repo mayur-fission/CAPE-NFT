@@ -32,3 +32,6 @@ Thumbs.db
 allure-report-single/
 allure-report.html
 allure-report.zip
+
+#ignore tests_1
+.tests_1

@@ -1,14 +1,13 @@
 """Like test_concurrent_sessions_10min_s.py, but sources the mrgsolve
-simulation script mrgsolve_sim.R (MRGSOLVE_SCRIPT). MRGSOLVE_SESSIONS
+simulation script run_mrgsolve.R (MRGSOLVE_SCRIPT). MRGSOLVE_SESSIONS
 sessions (default 1) launched from the UI, named MRGSOLVE_SESSION_1 ..
 _<N>, spread over MRGSOLVE_SESSIONS_BROWSERS browsers (blank = one
 browser per 5 sessions), all logged in as one user. Once every browser has
 launched its sessions, SCRIPT_PATH is sourced in all of them at the same time
-and each run is timed (timeout MRGSOLVE_SCRIPT_TIMEOUT_MS, default 15 min).
+and each run is timed (timeout MRGSOLVE_SCRIPT_TIMEOUT_MIN minutes, default 30).
 
-First the R packages the script needs (MRGSOLVE_R_PACKAGES) are checked, and
-any missing ones installed into the user's library, from a setup session of
-their own (MRGSOLVE_SESSION_SETUP), so the timed runs don't include the install.
+The R packages the script needs are not checked here: run
+test_mrgsolve_setup.py first (once per user/server) to install them.
 
 Every run gets its own folder, <output dir>/MRGSOLVE_USER_<session count>_<datetime>/
 (e.g. MRGSOLVE_USER_5_20261029-203754), and in it each session runs the script in its own
@@ -50,7 +49,6 @@ except ImportError:
 from common.concurrent_sessions import run_script_in_concurrent_sessions
 from common.result_printing import summarize_concurrent_runs
 from common.parallel_browsers import browsers_for
-from common.r_packages import MGSOLVE_PACKAGES as MRGSOLVE_PACKAGES, install_missing_r_packages
 from common.perf_report import attach_allure_file, write_csv_report
 from common.rstudio_console_commands import read_console_value, read_text_file
 from common.step_log import log_step
@@ -75,9 +73,6 @@ LAUNCH_RETRY_WAIT_S = int(env("CONCURRENT_SESSIONS_LAUNCH_RETRY_WAIT_S", "15"))
 # Checked in the test, not here: a missing setting skips only this test
 # instead of failing the collection of every other one.
 SCRIPT_PATH = env("MRGSOLVE_SCRIPT")
-# R packages the script needs; the missing ones are installed before it runs.
-# MRGSOLVE_R_PACKAGES (comma-separated) overrides ("none" = no check).
-R_PACKAGES = [p for p in env_list("MRGSOLVE_R_PACKAGES", MRGSOLVE_PACKAGES) if p.lower() != "none"]
 OUTPUT_DIR = env_path("OUTPUT_DIR_CONCURRENT_SESSIONS", "CONCURRENT_SESSIONS_OUTPUT_DIR",
                       "OUTPUT_DIR_GENERATE_CSV", "CSV_SESSIONS_OUTPUT_DIR")
 RUN_STARTED = time.strftime("%Y%m%d-%H%M%S")
@@ -87,8 +82,9 @@ RUN_DIR = posixpath.join(OUTPUT_DIR, "MRGSOLVE_USER_%d_%s" % (SESSION_COUNT, RUN
 # to count as ok. Unset = no output check.
 OUTPUT_FILES = env_list("MRGSOLVE_OUTPUT_FILES")
 RUN_SUMMARY_FILE = env("MRGSOLVE_RUN_SUMMARY", "")
-# The script runs for ~10 minutes; leave headroom on top.
-SCRIPT_TIMEOUT_MS = int(env("MRGSOLVE_SCRIPT_TIMEOUT_MS", "900000"))
+# Longest one script run may take, in minutes (the script runs ~20 min; headroom on top)
+SCRIPT_TIMEOUT_MIN = float(env("MRGSOLVE_SCRIPT_TIMEOUT_MIN") or 30)
+SCRIPT_TIMEOUT_MS = int(SCRIPT_TIMEOUT_MIN * 60000)
 # How often each console is checked for the end of the script.
 POLL_INTERVAL_MS = int(env("MRGSOLVE_POLL_MS", "500"))
 # Run start time in the name: every run writes its own CSV, charts and
@@ -149,10 +145,27 @@ def _summary_cell(summary, names, decimals):
         return value
 
 
-def save_summary_table_png(path, head, rows, title):
+def average_row(rows):
+    """An "Average" row for the run summary table: per column, the mean of
+    the sessions' values (2 decimals); blank where a column has no numbers
+    (Run Id) or no session has a summary."""
+    row = ["Average"]
+    for i in range(1, len(rows[0]) if rows else 1):
+        values = []
+        for r in rows:
+            try:
+                values.append(float(r[i]))
+            except (TypeError, ValueError):
+                pass
+        row.append("%.2f" % (sum(values) / len(values)) if values else "")
+    return row
+
+
+def save_summary_table_png(path, head, rows, title, last_row_total=False):
     """The run summary table drawn as an image at `path`, in the style of the
-    session time charts' stats table. Returns the path, or None (logged) if
-    it could not be drawn."""
+    session time charts' stats table; with last_row_total the last row (the
+    average) is set apart in bold on grey. Returns the path, or None (logged)
+    if it could not be drawn."""
     try:
         import matplotlib
 
@@ -176,6 +189,9 @@ def save_summary_table_png(path, head, rows, title):
             cell.set_facecolor("#e8ecf2")
             cell.set_text_props(fontweight="bold")
             cell.set_height(cell.get_height() * 1.6)
+        elif last_row_total and r == len(rows):
+            cell.set_facecolor("#e8ecf2")
+            cell.set_text_props(fontweight="bold")
         elif c == 0:
             cell.set_text_props(fontweight="bold", ha="left")
         elif r % 2 == 0:
@@ -196,14 +212,16 @@ def save_summary_table_png(path, head, rows, title):
 def report_run_summaries(runs, label):
     """The run summary table (SUMMARY_COLUMNS, one row per session, in
     session order): written to evidence/mrgsolve_run_summary_<label>.csv,
-    printed and attached to Allure as an HTML table. Sessions with no
-    summary get a row of blanks."""
+    printed and attached to Allure as an HTML table and an image. Sessions
+    with no summary get a row of blanks; an Average row (average_row(), over
+    the sessions that have one) closes the table."""
     head = ["Session Name"] + [header for _, header, _ in SUMMARY_COLUMNS]
     rows = []
     for run in sorted(runs, key=lambda r: int(r["session_name"].rsplit("_", 1)[-1])):
         summary = run.get("mrgsolve_summary") or {}
         rows.append([run["session_name"]] + [_summary_cell(summary, names, decimals) if summary else ""
                                              for names, _, decimals in SUMMARY_COLUMNS])
+    rows.append(average_row(rows))
     path = os.path.join(evidence_dir(), "mrgsolve_run_summary_%s.csv" % label)
     write_csv_report(path, [head] + rows)
     widths = [max(len(str(row[i])) for row in [head] + rows) for i in range(len(head))]
@@ -212,11 +230,14 @@ def report_run_summaries(runs, label):
         print("  " + " | ".join(str(cell).ljust(w) for cell, w in zip(row, widths)))
     png = save_summary_table_png(os.path.splitext(path)[0] + ".png", head, rows,
                                  "mrgsolve run summary - %s\nParent folder: %s"
-                                 % (describe_run(SESSION_COUNT, BROWSER_COUNT, USER), RUN_DIR))
+                                 % (describe_run(SESSION_COUNT, BROWSER_COUNT, USER), RUN_DIR),
+                                 last_row_total=True)
     if png:
         attach_allure_file(png, name="mrgsolve run summary (image)")
     if allure is not None:
-        table = "".join("<tr>%s</tr>" % "".join("<td>%s</td>" % html.escape(str(c)) for c in row) for row in rows)
+        table = "".join("<tr%s>%s</tr>" % (" style='font-weight:bold;background:#e8ecf2'" if i == len(rows) - 1 else "",
+                                            "".join("<td>%s</td>" % html.escape(str(c)) for c in row))
+                        for i, row in enumerate(rows))
         allure.attach(
             "<html><body><table border='1' cellpadding='4' style='border-collapse:collapse;font-family:sans-serif'>"
             "<tr>%s</tr>%s</table></body></html>" % ("".join("<th>%s</th>" % html.escape(h) for h in head), table),
@@ -228,8 +249,9 @@ def test_mrgsolve_r_script(browser_name, browser_type_launch_args, browser_conte
     MRGSOLVE_OUTPUT_FILES is set) in every session, each session's
     output in its MRGSOLVE_OUTPUT_SESSION_<N> folder of this run's folder.
 
-    Flow: check the R packages, installing missing ones (setup session) ->
-    per browser: login -> quit leftover sessions with its names ->
+    (R packages: test_mrgsolve_setup.py.)
+
+    Flow: per browser: login -> quit leftover sessions with its names ->
     launch each name in a tab -> wait for all browsers -> source the script
     in all tabs at once, each in its own folder -> wait for all -> check each
     session's output files (reading its run summary) -> close tabs -> quit
@@ -237,10 +259,8 @@ def test_mrgsolve_r_script(browser_name, browser_type_launch_args, browser_conte
     """
     if not SCRIPT_PATH:
         pytest.skip("MRGSOLVE_SCRIPT is not set - set it in .env (on Jenkins: in the environment's .env "
-                    "credential) to the path of mrgsolve_sim.R")
+                    "credential) to the path of run_mrgsolve.R")
     assert SESSION_COUNT >= 1, "MRGSOLVE_SESSIONS must be at least 1, got %d" % SESSION_COUNT
-    install_missing_r_packages(browser_name, browser_type_launch_args, browser_context_args, USER, R_PACKAGES,
-                               MRGSOLVE_SESSION_PREFIX + "SETUP")
     runs, errors = run_script_in_concurrent_sessions(
         browser_name, browser_type_launch_args, browser_context_args, USER, SESSION_NAMES, BROWSER_COUNT,
         TIMINGS_LABEL, SCRIPT_PATH, RUN_DIR, OUTPUT_FILES, SCRIPT_TIMEOUT_MS,
