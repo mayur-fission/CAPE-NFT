@@ -1,0 +1,162 @@
+"""Monitor how many Workbench sessions are running: every
+ACTIVE_SESSIONS_POLL_INTERVAL_S (10 s), count the rows on each user's
+session list with status Active (X) and Executing (Y), and record them with
+their total X + Y (the running sessions). Creates and quits no sessions.
+
+How long it runs: at most ACTIVE_SESSIONS_MONITOR_S (20 min). With
+ACTIVE_SESSIONS_STOP_FILE set (Jenkins sets it when other tests run
+alongside) it stops sooner once that file appears - Jenkins writes it when
+every other test of the build has finished - after one last poll.
+
+With ACTIVE_SESSIONS_READY_FILE set (Jenkins, with other tests alongside), that
+file is written once every user is logged in; Jenkins holds the other tests
+back until then, so counting starts before their browsers log in and launch.
+
+The Workbench home page only lists the signed-in user's own sessions (the
+admin dashboard is not enabled), so the total is over the users in
+ACTIVE_SESSIONS_USERS (e.g. "1,2"), not the whole server.
+"""
+import csv
+import os
+import time
+from datetime import datetime
+
+import pytest
+
+from config.config import REPO_ROOT, env, env_list, evidence_dir
+from common.evidence import save_screenshot
+from common.rstudio_session_helper import goto_session_list, stable_session_status_counts
+from common.session_actions import login_to_posit_workbench
+from common.perf_report import attach_allure_file
+
+pytestmark = pytest.mark.rstudio_local
+
+USERS = [int(u) for u in env_list("ACTIVE_SESSIONS_USERS", ["1"])]
+POLL_INTERVAL_S = float(env("ACTIVE_SESSIONS_POLL_INTERVAL_S", "10"))
+MONITOR_S = float(env("ACTIVE_SESSIONS_MONITOR_S", "1200"))
+# Relative paths are under the repo root (where Jenkins writes it).
+STOP_FILE = env("ACTIVE_SESSIONS_STOP_FILE") or None
+if STOP_FILE and not os.path.isabs(STOP_FILE):
+    STOP_FILE = os.path.join(REPO_ROOT, STOP_FILE)
+READY_FILE = env("ACTIVE_SESSIONS_READY_FILE") or None
+if READY_FILE and not os.path.isabs(READY_FILE):
+    READY_FILE = os.path.join(REPO_ROOT, READY_FILE)
+CSV_NAME = "active_sessions.csv"  # in the test's evidence folder
+
+
+def _csv_path():
+    return os.path.join(evidence_dir(), CSV_NAME)
+CSV_HEADER = ["Time", "Elapsed (s)", "Poll", "User", "Active", "Executing", "Total Sessions (Active + Executing)",
+              "Listed Sessions", "Statuses", "Error"]
+
+
+def _write_csv(rows):
+    """(Re)write the counts CSV with CSV_HEADER and `rows`, so the counts so far
+    are on disk even if the run is aborted."""
+    with open(_csv_path(), "w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(CSV_HEADER)
+        writer.writerows(rows)
+
+
+def _live(capsys, message):
+    """Print `message` past pytest's output capture, so it shows in the
+    console (the Jenkins Console Output) while the test is still running."""
+    with capsys.disabled():
+        print("\n[active-sessions] %s" % message, flush=True)
+
+
+def test_active_session_count_every_10_seconds(browser, browser_context_args, capsys):
+    """Every poll reads every user's session list.
+
+    - In progress: each poll prints a line to the console, e.g.
+      "[active-sessions] poll 7 at 2026-10-09 16:20:31 (+60s): Active=9,
+      Executing=3, Total sessions=12 (14 listed, users 1)".
+    - When over: evidence/active_sessions.csv has one row per poll and
+      user (plus a total row with several users) - time, seconds since the
+      first poll, the Active, Executing and total (Active + Executing)
+      counts, the listed count, every status seen, and the error for a poll
+      that could not read the list. It is rewritten after every poll and
+      attached to Allure at the end, with a screenshot of each poll.
+
+    Flow: login as each user (own browser context) -> every POLL_INTERVAL_S
+    until MONITOR_S: reload each session list and count Active and Executing
+    rows -> write CSV -> close contexts
+    """
+    contexts, pages, rows, errors = [], {}, [], []
+    try:
+        for user in USERS:
+            context = browser.new_context(**{**browser_context_args, "ignore_https_errors": True})
+            contexts.append(context)
+            page = context.new_page()
+            pages[user] = (page, login_to_posit_workbench(page, user=user))
+        if READY_FILE:
+            os.makedirs(os.path.dirname(READY_FILE), exist_ok=True)
+            with open(READY_FILE, "w") as fh:
+                fh.write("logged in\n")
+            _live(capsys, "logged in - the other tests can start")
+        _live(capsys, "counting Active + Executing sessions of users %s every %.0fs %s, into %s"
+              % (", ".join(str(u) for u in USERS), POLL_INTERVAL_S,
+                 "until the other tests finish (%s appears), at most %.0fs" % (STOP_FILE, MONITOR_S) if STOP_FILE
+                 else "for %.0fs" % MONITOR_S,
+                 _csv_path()))
+
+        started = time.time()
+        poll = 0
+        while True:
+            poll += 1
+            poll_started = time.time()
+            # Checked before the poll, so the poll after the other tests end is the last one.
+            others_done = bool(STOP_FILE) and os.path.exists(STOP_FILE)
+            stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            elapsed = "%.0f" % (poll_started - started)
+            sum_active = sum_executing = sum_listed = failed = 0
+            for user, (page, home_url) in pages.items():
+                try:
+                    goto_session_list(page, home_url)
+                    statuses = stable_session_status_counts(page)
+                except Exception as exc:
+                    failed += 1
+                    errors.append("poll %d, user %d: %s" % (poll, user, exc))
+                    rows.append([stamp, elapsed, poll, "user %d" % user, "", "", "", "", "", "error: %s" % exc])
+                    _live(capsys, "poll %d at %s: could not read user %d's session list: %s" % (poll, stamp, user, exc))
+                    save_screenshot(page, "active_sessions_failed_U%d_poll%d.png" % (user, poll), always=True)
+                    continue
+                active, executing = statuses.get("Active", 0), statuses.get("Executing", 0)
+                listed = sum(statuses.values())
+                sum_active += active
+                sum_executing += executing
+                sum_listed += listed
+                rows.append([stamp, elapsed, poll, "user %d" % user, active, executing, active + executing, listed,
+                             "; ".join("%s=%d" % kv for kv in sorted(statuses.items())), ""])
+                save_screenshot(page, "active_sessions_U%d_poll%d.png" % (user, poll))
+            if len(pages) > 1:
+                rows.append([stamp, elapsed, poll, "total", sum_active, sum_executing, sum_active + sum_executing,
+                             sum_listed, "", "%d user(s) could not be read" % failed if failed else ""])
+            _write_csv(rows)
+            _live(capsys, "poll %d at %s (+%ss): Active=%d, Executing=%d, Total sessions=%d (%d listed, users %s)%s"
+                  % (poll, stamp, elapsed, sum_active, sum_executing, sum_active + sum_executing, sum_listed,
+                     ", ".join(str(u) for u in USERS),
+                     " - %d user(s) could not be read" % failed if failed else ""))
+
+            # Polls start POLL_INTERVAL_S apart (a poll that takes longer is
+            # followed by the next one straight away).
+            next_poll = poll_started + POLL_INTERVAL_S
+            if others_done:
+                _live(capsys, "the other tests have finished - stopping after %d poll(s)" % poll)
+                break
+            if next_poll - started > MONITOR_S:
+                if STOP_FILE:
+                    _live(capsys, "stopping at the ACTIVE_SESSIONS_MONITOR_S limit (%.0fs) - the other tests are "
+                                  "still running" % MONITOR_S)
+                break
+            time.sleep(max(0.0, next_poll - time.time()))
+    finally:
+        if rows:
+            _write_csv(rows)
+            attach_allure_file(_csv_path())
+            _live(capsys, "%d poll(s) written to %s" % (len({r[2] for r in rows}), _csv_path()))
+        for context in contexts:
+            context.close()
+
+    assert not errors, "polls that could not read a session list: %s" % errors
