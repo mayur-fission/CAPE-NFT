@@ -56,7 +56,7 @@ Server paths have no defaults in the code: every folder, R script and
 | `WORKBENCH_HOME_DIR` | Home folder of the test user on the server (concurrent tests set it after launch) |
 | `RSTUDIO_WORKING_DIR` | Working folder for new sessions (also the API tests) |
 | `WORKING_DIR_EXISTING_SESSIONS` | Working folder in existing sessions (optional; defaults to `RSTUDIO_WORKING_DIR`) |
-| `R_SCRIPT_HIGH_THROUGHPUT` / `OUTPUT_DIR_HIGH_THROUGHPUT` | test_167, test_168, test_167_multiple_times, test_run_high_throughput_job, test_launch_existing_session_and_run_r_scripts |
+| `R_SCRIPT_HIGH_THROUGHPUT` / `OUTPUT_DIR_HIGH_THROUGHPUT` | test_run_high_throughput_job, test_launch_existing_session_and_run_r_scripts |
 | `R_SCRIPT_CLOSE_TAB_JOB` | test_run_r_close_browser |
 | `R_SCRIPT_GENERATE_CSV` / `OUTPUT_DIR_GENERATE_CSV` | The CSV-session (group) tests |
 | `R_SCRIPT_GROUP_B_WORKBENCH_JOB`, `R_SCRIPT_GROUP_B_BACKGROUND_JOB` | Group B jobs in the group tests |

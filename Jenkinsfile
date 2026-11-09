@@ -45,10 +45,10 @@ TEST_FILES = [
         'Users 1 and 2 signed in at once, each in its own browser context (creates no sessions)',
     'test_rstudio_sessions'                             : 'Sessions stay alive while idle (file list polled), then are quit',
     // --- High-throughput R script
-    'test_167'                                          : 'US 167 - high-throughput script, timed',
-    'test_167_multiple_times'                           :
-        'US 167 - the test_167 run repeated HTP_REPEAT_RUNS times, HTP_REPEAT_WAIT_S seconds apart',
-    'test_168'                                          : 'US 168 - high-throughput script, timed',
+    'test_167'                                          : 'US 167 - mrgsolve scenario 1: run_mrgsolve.R in one session, timed (run time set in the R script)',
+    'test_168_multiple_times'                           :
+        'US 168 - mrgsolve scenario 2: run_mrgsolve.R in one session, repeated TEST_168_MULTIPLE_RUNS times, TEST_168_MULTIPLE_WAIT_MIN minutes apart',
+    'test_168'                                          : 'US 168 - mrgsolve scenario 3: run_mrgsolve.R in RSTUDIO_168_COUNT concurrent sessions, timed (run time set in the R script)',
     'test_run_high_throughput_job'                      :
         'High-throughput script in new sessions: left running after the tab closes, or timed to completion',
     // --- Sessions left running with their tabs closed
@@ -215,8 +215,8 @@ for (name in TEST_NAMES) {
 // --- Shared by several tests ---
 jobParams << string(name: 'SESSION_COUNT', defaultValue: '10',
     description: '[Shared] Sessions each multi-session test launches (sets RSTUDIO_SESSION_COUNT, overriding .env). Whole ' +
-                 'number, at least 1. Default: 10. Used by: test_168 and ' +
-                 'test_run_r_close_browser. Not used by the concurrent-session tests (see below)')
+                 'number, at least 1. Default: 10. Used by: ' +
+                 'test_run_r_close_browser (test_168 uses RSTUDIO_168_COUNT from .env). Not used by the concurrent-session tests (see below)')
 jobParams << string(name: 'UI_BROWSER_STAGGER_S', defaultValue: '30',
     description: '[Shared] Seconds between starting one browser and the next within a test, so their logins do not ' +
                  'collide. Whole number, 0 or more. Default: 30. A run with N browsers takes (N-1) x this to get them all ' +
@@ -257,16 +257,12 @@ jobParams << string(name: 'SESSION_TIME_THRESHOLD_S', defaultValue: '',
                  'the session time charts, with a count of the sessions above it. It only marks the charts and does not ' +
                  'fail the test. Blank (default) = no line. Used by: test_concurrent_sessions, _10min, _10min_s, _30min')
 // --- Other tests ---
-jobParams << string(name: 'HIGH_THROUGHPUT_DURATION_S', defaultValue: '',
-    description: '[Other tests] test_167 / test_168: seconds each high-throughput script run may take before it counts as ' +
-                 'failed. Whole number, at least 1. Blank (default) = HIGH_THROUGHPUT_JOB_TEST_DURATION_SECONDS from .env ' +
-                 '(180 if not set there)')
-jobParams << string(name: 'HTP_REPEAT_RUNS', defaultValue: '3',
-    description: '[Other tests] test_167_multiple_times: how many times the test_167 run is repeated, one after another ' +
+jobParams << string(name: 'TEST_168_MULTIPLE_RUNS', defaultValue: '3',
+    description: '[Other tests] test_168_multiple_times: how many times the single-session mrgsolve run is repeated, one after another ' +
                  '(a new session each time). Whole number, at least 1. Default: 3')
-jobParams << string(name: 'HTP_REPEAT_WAIT_S', defaultValue: '30',
-    description: '[Other tests] test_167_multiple_times: seconds to wait before each run after the first. ' +
-                 'Whole number, 0 or more. Default: 30')
+jobParams << string(name: 'TEST_168_MULTIPLE_WAIT_MIN', defaultValue: '1',
+    description: '[Other tests] test_168_multiple_times: minutes to wait after a run finishes before the next one starts. ' +
+                 'Whole number, 0 or more. Default: 1')
 jobParams << string(name: 'CLOSE_BROWSER_WAIT_S', defaultValue: '',
     description: '[Other tests] test_run_r_close_browser: seconds the sessions keep running with their tabs ' +
                  'closed before they are quit. Whole number. Blank (default) = RSTUDIO_WORKBENCH_JOB_TEST_DURATION_SECONDS ' +
@@ -349,7 +345,7 @@ def setupPython() {
 // Copy the ENVIRONMENT's .env into the workspace (the tests load it from the
 // repo root, config/config.py) and drop the last build's results, since the
 // workspace is reused between builds. Call inside withCredentials(ENV_FILE).
-// SESSION_COUNT, HIGH_THROUGHPUT_DURATION_S and the evidence switches
+// SESSION_COUNT and the evidence switches
 // (SCREENSHOT_ALL_STEPS, CAPTURE_TEST_DATA) are appended to .env rather than
 // passed with withEnv, because .env is loaded with override=True and
 // python-dotenv keeps the last value.
@@ -359,10 +355,6 @@ def prepareWorkspace() {
         "EVIDENCE_SCREENSHOTS=${params.SCREENSHOT_ALL_STEPS?.toString() == 'true' ? '1' : '0'}",
         "EVIDENCE_TEST_DATA=${params.CAPTURE_TEST_DATA?.toString() == 'true' ? '1' : '0'}",
     ]
-    def htpDuration = (params.HIGH_THROUGHPUT_DURATION_S ?: '').trim()
-    if (htpDuration) {
-        overrides << "HIGH_THROUGHPUT_JOB_TEST_DURATION_SECONDS=${htpDuration}"
-    }
     if (isUnix()) {
         // Jenkins keeps secret files read-only and cp keeps that mode: make the
         // copy writable, since the overrides below are appended to it.
@@ -554,10 +546,10 @@ pipeline {
                     }
                     def atLeastOne = ['UI_BROWSERS', 'SESSION_COUNT', 'CONCURRENT_SESSIONS', 'CONCURRENT_10MIN_SESSIONS', 'CONCURRENT_30MIN_SESSIONS',
                                       'CONCURRENT_SMALL_10MIN_SESSIONS',
-                                      'HTP_REPEAT_RUNS']
+                                      'TEST_168_MULTIPLE_RUNS']
                     ['UI_BROWSERS', 'SESSION_COUNT', 'CONCURRENT_SESSIONS', 'CONCURRENT_10MIN_SESSIONS', 'CONCURRENT_30MIN_SESSIONS',
                      'CONCURRENT_SMALL_10MIN_SESSIONS',
-                     'HTP_REPEAT_RUNS', 'HTP_REPEAT_WAIT_S',
+                     'TEST_168_MULTIPLE_RUNS', 'TEST_168_MULTIPLE_WAIT_MIN',
                      'UI_BROWSER_STAGGER_S', 'PARALLEL_LOGIN_GAP_S', 'GROUP_TEST_DURATION_S',
                      'ACTIVE_SESSIONS_MONITOR_S', 'NODE_START_OFFSET_S'].each { name ->
                         if (params[name] == null) {
@@ -567,10 +559,6 @@ pipeline {
                         if (!(value ==~ /\d+/) || (name in atLeastOne && value.toInteger() < 1)) {
                             error("${name} must be a whole number${name in atLeastOne ? ' of at least 1' : ''}, got '${params[name]}'")
                         }
-                    }
-                    def htpDuration = (params.HIGH_THROUGHPUT_DURATION_S ?: '').trim()
-                    if (htpDuration && (!(htpDuration ==~ /\d+/) || htpDuration.toInteger() < 1)) {
-                        error("HIGH_THROUGHPUT_DURATION_S must be blank or a whole number of at least 1, got '${params.HIGH_THROUGHPUT_DURATION_S}'")
                     }
                     env.TEST_PATHS = selected.collect { "tests/${it}.py" }.join(' ')
                     env.SELECTED_TESTS = selected.join(',')
@@ -618,8 +606,8 @@ pipeline {
                     "CONCURRENT_10MIN_THRESHOLD_S=${(params.SESSION_TIME_THRESHOLD_S ?: '').trim()}",
                     "CONCURRENT_30MIN_THRESHOLD_S=${(params.SESSION_TIME_THRESHOLD_S ?: '').trim()}",
                     "CONCURRENT_SMALL_10MIN_THRESHOLD_S=${(params.SESSION_TIME_THRESHOLD_S ?: '').trim()}",
-                    "HTP_REPEAT_RUNS=${(params.HTP_REPEAT_RUNS ?: '3').trim()}",
-                    "HTP_REPEAT_WAIT_S=${(params.HTP_REPEAT_WAIT_S ?: '30').trim()}",
+                    "TEST_168_MULTIPLE_RUNS=${(params.TEST_168_MULTIPLE_RUNS ?: '3').trim()}",
+                    "TEST_168_MULTIPLE_WAIT_MIN=${(params.TEST_168_MULTIPLE_WAIT_MIN ?: '1').trim()}",
                 ]) {
                     withCredentials([file(credentialsId: "cape-nft-env-${params.ENVIRONMENT.toLowerCase()}", variable: 'ENV_FILE')]) {
                         script {
