@@ -19,7 +19,8 @@ Per session (common/fsync_setup.py), before the scripts start:
   the Files pane's Upload button) -> setwd via Files pane > More > Set As
   Working Directory -> Sys.setenv(FSYNC_SESSION_DIR, FSYNC_VENV_PYTHON,
   FSYNC_PY_FILE) for the R script
-Then source(<session folder>/<R file>) in all sessions at once.
+Then source(<session folder>/<R file>) in all sessions at once; each session waits until
+its R file ends by itself (no time limit - the R file sets its own run time).
 
 Results: evidence/fsync_setup_<TIMINGS_LABEL>.csv (setup per session: status,
 setup and copy/upload time, python versions, df -h), and as in test_168
@@ -36,6 +37,7 @@ import pytest
 
 from common.concurrent_sessions import run_script_in_concurrent_sessions
 from common.fsync_setup import setup_session, write_setup_csv
+from common.rstudio_console_commands import get_console_output
 from common.parallel_browsers import browsers_for
 from common.perf_report import attach_allure_file
 from common.result_printing import summarize_concurrent_runs
@@ -70,8 +72,13 @@ LAUNCH_TIMEOUT_MIN = float(env("FSYNC_LAUNCH_TIMEOUT_MIN", "3"))
 LAUNCH_RETRY_WAIT_S = int(env("FSYNC_LAUNCH_RETRY_WAIT_S", "15"))
 # Longest one setup command (e.g. creating the venv) may take, in minutes
 SETUP_TIMEOUT_MIN = float(env("FSYNC_SETUP_TIMEOUT_MIN") or 10)
-# Longest one R file run may take, in minutes
-SCRIPT_TIMEOUT_MIN = float(env("FSYNC_SCRIPT_TIMEOUT_MIN") or 60)
+# The test never stops the R file: it runs as long as the file itself says
+# (run_seconds etc. in run_load.R) and each session waits until it ends by
+# itself. The shared runner needs a number, so it gets one far beyond any
+# real run (7 days, in minutes) - it is not a test duration.
+NO_LIMIT_MIN = 7 * 24 * 60
+# Console lines printed per session once its R file has finished
+CONSOLE_TAIL_LINES = int(env("FSYNC_CONSOLE_TAIL_LINES", "25"))
 POLL_INTERVAL_MS = int(env("FSYNC_POLL_MS", "500"))
 THRESHOLD_S = float(env("FSYNC_THRESHOLD_S") or 0) or None
 TIMINGS_LABEL = RUN_FOLDER
@@ -86,6 +93,17 @@ def _file_paths():
         missing = [p for p in paths if not os.path.isfile(p)]
         assert not missing, "FSYNC_FILES_MODE=upload: local files not found: %s" % missing
     return paths
+
+
+def _print_console_tail(page, record):
+    """Print the end of a session's console once its R file has finished:
+    the R file's own output (timings, errors it printed) in the test log."""
+    try:
+        tail = get_console_output(page).strip().splitlines()[-CONSOLE_TAIL_LINES:]
+        print("\n[rstudio-local] session %s: R file finished (%s); console ends with:\n%s"
+              % (record["session_name"], record.get("status"), "\n".join(tail)))
+    except Exception as exc:
+        print("\n[rstudio-local] session %s: could not read its console: %s" % (record["session_name"], exc))
 
 
 def test_fsync_concurrent_sessions(browser_name, browser_type_launch_args, browser_context_args):
@@ -129,11 +147,11 @@ def test_fsync_concurrent_sessions(browser_name, browser_type_launch_args, brows
     sessions_per_browser = -(-SESSION_COUNT // BROWSER_COUNT)
     runs, errors = run_script_in_concurrent_sessions(
         browser_name, browser_type_launch_args, browser_context_args, USER, SESSION_NAMES, BROWSER_COUNT,
-        TIMINGS_LABEL, scripts, RUN_DIR, None, int(SCRIPT_TIMEOUT_MIN * 60000),
+        TIMINGS_LABEL, scripts, RUN_DIR, None, int(NO_LIMIT_MIN * 60000),
         stagger_s=BROWSER_STAGGER_S, attempts=LAUNCH_ATTEMPTS,
         launch_timeout_ms=int(LAUNCH_TIMEOUT_MIN * 60000), retry_wait_s=LAUNCH_RETRY_WAIT_S,
         delete_output=False, poll_interval_ms=POLL_INTERVAL_MS, session_folders=SESSION_FOLDERS,
-        after_prepare=_setup, after_prepare_s=sessions_per_browser * (SETUP_TIMEOUT_MIN * 60 + 300),
+        after_run=_print_console_tail, after_prepare=_setup, after_prepare_s=sessions_per_browser * (SETUP_TIMEOUT_MIN * 60 + 300),
     )
 
     setup_csv = os.path.join(evidence_dir(), "fsync_setup_%s.csv" % TIMINGS_LABEL)
