@@ -173,7 +173,8 @@ def run_script_in_launched_sessions(launched, script_path, working_dir=None, tim
             continue
         session_dir, error = prepared.get(session.session_name, (None, "its working directory was not set"))
         if error is not None:
-            record["status"] = "setwd failed: %s" % error
+            # an after_prepare step (e.g. a setup) can name its own failure
+            record["status"] = "%s: %s" % (getattr(error, "status_prefix", "setwd failed"), error)
             continue
         ready.append((session.page, record, session_dir))
 

@@ -119,3 +119,20 @@ FILES_DELETE_BUTTON_SELECTOR = "#rstudio_tb_deletefiles"
 FILES_DELETE_BUTTON = "Delete"
 FILES_DELETE_CONFIRM_YES_SELECTOR = "#rstudio_dlg_yes"
 FILES_DELETE_CONFIRM_YES_BUTTON = "Yes"
+# Upload (common/fsync_setup.py): the toolbar's Upload button opens "Upload
+# Files" (target = the folder shown in the pane) with a file input and OK.
+FILES_UPLOAD_BUTTON_SELECTOR = "#rstudio_tb_uploadfile"
+# Fallback when the Upload button has no id
+FILES_UPLOAD_BUTTON = "Upload"
+FILES_UPLOAD_INPUT_SELECTOR = "input[type='file']"
+# Fallback when the dialog has no dialog role: GWT dialog box titled "Upload Files"
+FILES_UPLOAD_DIALOG_BOX_SELECTOR = ".gwt-DialogBox"
+FILES_UPLOAD_DIALOG_TITLE = "Upload Files"
+# "Target directory" text box (defaults to the folder the Files pane shows)
+FILES_UPLOAD_TARGET_DIR_SELECTOR = "input[type='text']"
+FILES_UPLOAD_OK_SELECTOR = "#rstudio_dlg_ok"
+FILES_UPLOAD_OK_BUTTON = "OK"
+# Files pane "More" menu (gear) -> "Set As Working Directory": setwd() to
+# the folder shown in the pane
+FILES_MORE_BUTTON = "More"
+FILES_SET_AS_WORKING_DIR_ITEM = "Set As Working Directory"

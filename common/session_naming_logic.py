@@ -47,6 +47,8 @@ MGSOLVE_10MIN_SESSION_PREFIX = "MGSOLVE_10MIN_SESSION_"
 MRGSOLVE_SESSION_PREFIX = "MRGSOLVE_SESSION_"
 # test_mrgsolve_concurrent_batch (same script, each browser starts as soon as its sessions are up)
 MRGSOLVE_BATCH_SESSION_PREFIX = "MRGSOLVE_BATCH_SESSION_"
+# test_fsync_concurrent (venv setup + uploaded R/Python files, one folder per session)
+FSYNC_SESSION_PREFIX = "FSYNC_SESSION_"
 # test_pknca_10min (pknca_nca_10min.R)
 PKNCA_10MIN_SESSION_PREFIX = "PKNCA_10MIN_SESSION_"
 # test_nlmixr_10min (nlmixr2_sse_10min.R)
@@ -82,7 +84,7 @@ ALL_SESSION_NAME_PREFIXES = (AUTO_PERF_NAME_PREFIX, RUN_R_SESSION_NAME_PREFIX, U
                              TIDYVERSE_GGPLOT_10MIN_SESSION_PREFIX, PMT_10MIN_SESSION_PREFIX,
                              RUN_R_CLOSE_SESSION_PREFIX, BATCH_RUN_R_CLOSE_SESSION_PREFIX, FILE_CRUD_SESSION_PREFIX,
                              LOAD_FILES_SESSION_PREFIX, BACKGROUND_JOB_SESSION_PREFIX, CONCURRENT_IDLE_SESSION_PREFIX,
-                             SCENARIO_1_SESSION_PREFIX, CLEANUP_SESSION_PREFIX)
+                             SCENARIO_1_SESSION_PREFIX, CLEANUP_SESSION_PREFIX, FSYNC_SESSION_PREFIX)
 
 
 def user_session_name_prefix(user):

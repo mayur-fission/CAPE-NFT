@@ -46,6 +46,8 @@ SCRIPT_STAGE = "running the R script / checking outputs"
 # output, at once.
 START_SPREAD_S = float(env("CONCURRENT_START_SPREAD_S") or 0)
 SPREAD_STAGE = "waiting for its turn to start (CONCURRENT_START_SPREAD_S)"
+# The per-session setup a test can add after the folders are made (after_prepare)
+PREPARE_STAGE = "setting up the sessions (after_prepare)"
 # Time on top of the script timeout for the output checks (a check that does
 # not get through reloads the tab and tries again) before a browser counts as stuck
 OUTPUT_CHECK_SLACK_S = 300
@@ -63,7 +65,7 @@ def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, u
                                       script_timeout_ms, stagger_s=0, attempts=3, launch_timeout_ms=180000,
                                       retry_wait_s=15, delete_output=False, poll_interval_ms=500,
                                       start_together=True, summary_file=None, session_folders=None,
-                                      after_run=None):
+                                      after_run=None, after_prepare=None, after_prepare_s=0):
     """Run `script_path` in `session_names` spread over `browser_count`
     browsers (started `stagger_s` apart), each run timed. `script_path` can
     also be {session name: script path}, a script of its own per session.
@@ -83,6 +85,12 @@ def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, u
     run_script_in_launched_sessions().
     session_folders: {session name: folder name} under `output_dir`, for
     folders not named after their session.
+    after_prepare: called as after_prepare(launched, prepared) in each browser
+    once its session folders are set as working directories, before waiting
+    for the other browsers (e.g. a per-session setup); it marks a session it
+    could not set up by setting prepared[name] = (folder, error), and that
+    session's script is then not run. after_prepare_s: the longest it may
+    take per browser, in seconds (for the stuck-browser and cleanup waits).
     after_run: called as after_run(page, record) once a session's script has
     finished - see run_script_in_launched_sessions().
     Returns (runs, errors): run records, "browser <B>: <error>" per failure.
@@ -103,7 +111,8 @@ def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, u
     # A browser still running its script is not stuck: only after the script
     # timeout (plus time for the output checks) is it captured as one
     progress = BrowserProgress(prefixes, label=label, debug_ports=debug_ports, stage_limits={
-        SCRIPT_STAGE: script_timeout_ms / 1000.0 + OUTPUT_CHECK_SLACK_S, SPREAD_STAGE: START_SPREAD_S + 60})
+        SCRIPT_STAGE: script_timeout_ms / 1000.0 + OUTPUT_CHECK_SLACK_S, SPREAD_STAGE: START_SPREAD_S + 60,
+        PREPARE_STAGE: after_prepare_s})
     # Each browser's wait before starting its scripts (CONCURRENT_START_SPREAD_S)
     spread = START_SPREAD_S if start_together and browser_count > 1 else 0
     start_delays = {p: spread * i / (browser_count - 1) if spread else 0 for i, p in enumerate(prefixes)}
@@ -117,7 +126,7 @@ def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, u
     # every launch and running the script to its timeout.
     cleanup_wait_s = int(env("CONCURRENT_CLEANUP_WAIT_S") or (
         script_timeout_ms / 1000.0 + attempts * (launch_timeout_ms / 1000.0 + retry_wait_s)
-        + stagger_s * browser_count + spread + 300))
+        + stagger_s * browser_count + spread + after_prepare_s + 300))
 
     def _worker(context, prefix):
         return _run_script_in_browser(
@@ -125,7 +134,7 @@ def run_script_in_concurrent_sessions(browser_name, launch_args, context_args, u
             ready, progress, launch_failed, attempts, launch_timeout_ms, retry_wait_s,
             script_path, output_dir, output_file_name, script_timeout_ms, delete_output, poll_interval_ms,
             start_together, cleanup_wait_s, cleanup, summary_file, start_delays[prefix], session_folders,
-            after_run,
+            after_run, after_prepare,
         )
 
     results = run_in_parallel_browsers(
@@ -163,7 +172,7 @@ def _run_script_in_browser(context, prefix, session_names, user, label, ready, p
                            attempts, launch_timeout_ms, retry_wait_s, script_path, output_dir,
                            output_file_name, script_timeout_ms, delete_output=False, poll_interval_ms=500,
                            start_together=True, cleanup_wait_s=3600, cleanup=None, summary_file=None,
-                           start_delay_s=0, session_folders=None, after_run=None):
+                           start_delay_s=0, session_folders=None, after_run=None, after_prepare=None):
     """One browser's part of run_script_in_concurrent_sessions(); a browser
     whose launch fails adds its prefix to `launch_failed`. Each stage is
     recorded in `progress` (a BrowserProgress), which also holds the wait
@@ -212,6 +221,9 @@ def _run_script_in_browser(context, prefix, session_names, user, label, ready, p
             progress.set(prefix, "preparing the session folders")
             prepared = prepare_session_folders(launched, output_dir, per_session_dir=True,
                                                session_folders=session_folders)
+            if after_prepare is not None:
+                progress.set(prefix, PREPARE_STAGE)
+                after_prepare(launched, prepared)
         except Exception:
             launch_failed.add(prefix)
             raise
