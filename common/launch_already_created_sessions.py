@@ -9,7 +9,9 @@ import posixpath
 from collections import namedtuple
 
 from config.config import env
-from common.rstudio_console_commands import get_console_output, r_source_command, wait_for_console_ready
+from common.evidence import save_screenshot
+from common.rstudio_console_commands import (
+    get_console_output, r_source_command, recover_console, wait_for_console_ready)
 from common.rstudio_session_helper import is_session_alive, open_existing_session
 from common.script_outputs import check_console_run_summary, check_output_file, read_run_summary
 from common.script_timings import new_run_record, submit_in_each, wait_for_console_runs
@@ -116,12 +118,16 @@ def prepare_session_folders(launched, working_dir=None, per_session_dir=False, s
                 # A tab that is busy (many tabs open) can miss one console read; try again
                 if attempt < SETWD_ATTEMPTS:
                     log_step("Could not set the working directory in session %s (attempt %d of %d), "
-                             "retrying in %ds: %s", session.session_name, attempt, SETWD_ATTEMPTS,
-                             SETWD_RETRY_WAIT_S, exc)
+                             "pressing Esc in its console and retrying once R answers: %s",
+                             session.session_name, attempt, SETWD_ATTEMPTS, exc)
                     session.page.wait_for_timeout(SETWD_RETRY_WAIT_S * 1000)
+                    # a console stuck on an unfinished command takes no more: clear it first
+                    recover_console(session.page, timeout_ms=CONSOLE_READY_TIMEOUT_MS)
                     continue
                 prepared[session.session_name] = (session_dir, exc)
                 log_step("Could not set the working directory in session %s: %s", session.session_name, exc)
+                save_screenshot(session.page, "setwd_failed_%s.png" % session.session_name, always=True)
+                report_console_timeout(session.page, session.session_name)
     return prepared
 
 

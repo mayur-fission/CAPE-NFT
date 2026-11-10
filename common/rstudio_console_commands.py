@@ -333,3 +333,19 @@ def run_console_command(page, command, timeout_ms=300000, poll_interval_ms=500):
 def get_console_output(page):
     """Full text currently in the console output pane."""
     return page.locator(locators.CONSOLE_OUTPUT_SELECTOR).inner_text(timeout=CONSOLE_WAIT_TIMEOUT_MS)
+
+
+def recover_console(page, timeout_ms=120000):
+    """Get a console that stopped taking commands back to a prompt: press
+    Esc in it (cancels a half-typed or unfinished command - one left waiting
+    at the "+" prompt - and interrupts R if it is busy), then wait until R
+    answers again. Returns True if it does; never raises."""
+    try:
+        page.locator(locators.CONSOLE_INPUT_SELECTOR).first.click(force=True, timeout=CONSOLE_WAIT_TIMEOUT_MS)
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(1000)
+        wait_for_console_ready(page, timeout_ms=timeout_ms)
+        return True
+    except Exception as exc:
+        print("\n[rstudio-local] console did not come back after Esc: %s" % " ".join(str(exc).split())[:200])
+        return False

@@ -7,13 +7,19 @@ from collections import namedtuple
 
 from common import locators
 from common.rstudio_console_commands import r_string, read_console_value, run_console_command
+from config.config import env
+
+# Longest one setwd() may take. A network mount that is slow to answer (e.g.
+# /mnt/svmroot under load) can need far more than the default; too short and
+# the retry types setwd() again while R is still busy with the first one.
+SETWD_TIMEOUT_MS = int(float(env("SETWD_TIMEOUT_S") or 10) * 1000)
 
 
-def set_working_directory(page, path, timeout_ms=10000):
+def set_working_directory(page, path, timeout_ms=None):
     """Run setwd(path) in the console. Raises RuntimeError if it fails or
     times out.
     """
-    run_console_command(page, 'setwd(%s)' % r_string(path), timeout_ms=timeout_ms)
+    run_console_command(page, 'setwd(%s)' % r_string(path), timeout_ms=timeout_ms or SETWD_TIMEOUT_MS)
 
 
 def get_working_directory(page, timeout_ms=10000):
@@ -86,6 +92,20 @@ def close_all_editor_files(page, session_name, timeout_ms=30000):
         print("\n[rstudio-local] session %s: could not close the editor files: %s" % (session_name, exc))
 
 
+def _why_not_writable(page, folder, timeout_ms=30000):
+    """Why a folder can't be made in `folder`: the nearest level of it that
+    exists, and whether this user can write there. Never raises."""
+    r_dir = r_string(folder)
+    r_expr = ("{d <- %s; while (!dir.exists(d) && d != dirname(d)) d <- dirname(d); "
+              "if (d == %s) paste0(d, ' exists, writable by ', Sys.info()[['user']], ': ', file.access(d, 2) == 0) "
+              "else paste0(%s, ' does not exist in this session; nearest existing folder ', d, "
+              "', writable by ', Sys.info()[['user']], ': ', file.access(d, 2) == 0)}") % (r_dir, r_dir, r_dir)
+    try:
+        return read_console_value(page, r_expr, timeout_ms)
+    except Exception as exc:
+        return "could not check why: %s" % " ".join(str(exc).split())[:150]
+
+
 def recreate_session_folder(page, working_dir, session_name, timeout_ms=30000):
     """Delete `working_dir`/`session_name` with everything in it (data left
     by an earlier run of the session) and create it again, empty. Returns
@@ -97,7 +117,7 @@ def recreate_session_folder(page, working_dir, session_name, timeout_ms=30000):
     r_path = r_string(path)
     r_expr = "{unlink(%s, recursive=TRUE); format(dir.create(%s, recursive=TRUE))}" % (r_path, r_path)
     if read_console_value(page, r_expr, timeout_ms) != "TRUE":
-        raise RuntimeError("could not remove and recreate %s" % path)
+        raise RuntimeError("could not remove and recreate %s: %s" % (path, _why_not_writable(page, working_dir)))
     print("\n[rstudio-local] session %s: removed earlier test data, %s is empty" % (session_name, path))
     return path
 

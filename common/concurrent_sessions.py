@@ -26,6 +26,7 @@ from common.launch_already_created_sessions import (
     run_script_in_launched_sessions,
 )
 from common.session_actions import set_session_working_directory
+from common.rstudio_console_commands import recover_console
 from common.single_browser_cleanup import SingleBrowserCleanup
 from common.step_log import log_step
 from common.session_naming_logic import browser_name_prefixes
@@ -214,6 +215,7 @@ def _run_script_in_browser(context, prefix, session_names, user, label, ready, p
                                  "retrying in %ds: %s", session.session_name, attempt, SETWD_ATTEMPTS,
                                  SETWD_RETRY_WAIT_S, exc)
                         session.page.wait_for_timeout(SETWD_RETRY_WAIT_S * 1000)
+                        recover_console(session.page)
             # Each session's own empty <output_dir>/<session> folder, set as its
             # working directory now - before waiting for the other browsers - so
             # that afterwards the scripts are only submitted and start within
