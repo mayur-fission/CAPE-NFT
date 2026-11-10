@@ -6,7 +6,7 @@ import time
 from collections import namedtuple
 
 from common import locators
-from common.rstudio_console_commands import r_string, read_console_value, run_console_command
+from common.rstudio_console_commands import RCommandError, r_string, read_console_value, run_console_command
 from config.config import env
 
 # Longest one setwd() may take. A network mount that is slow to answer (e.g.
@@ -19,7 +19,27 @@ def set_working_directory(page, path, timeout_ms=None):
     """Run setwd(path) in the console. Raises RuntimeError if it fails or
     times out.
     """
-    run_console_command(page, 'setwd(%s)' % r_string(path), timeout_ms=timeout_ms or SETWD_TIMEOUT_MS)
+    try:
+        run_console_command(page, 'setwd(%s)' % r_string(path), timeout_ms=timeout_ms or SETWD_TIMEOUT_MS)
+    except RCommandError as exc:
+        # R only says "cannot change working directory": add whether the
+        # folder is there, and whether this user may open (search) it
+        raise RCommandError("%s - %s" % (exc, _folder_access(page, path)))
+
+
+def _folder_access(page, path, timeout_ms=30000):
+    """"<path>: exists TRUE/FALSE, user <u> can open: ..., read: ..., write: ..."
+    for a folder, or the nearest existing folder above it. Never raises."""
+    r_dir = r_string(path)
+    r_expr = ("{d <- %s; while (!dir.exists(d) && d != dirname(d)) d <- dirname(d); "
+              "a <- function(m) file.access(d, m) == 0; "
+              "paste0(if (d == %s) paste0(d, ' exists') else paste0(%s, ' does not exist; nearest existing ', d), "
+              "', user ', Sys.info()[['user']], ' can open: ', a(1), ', read: ', a(4), ', write: ', a(2))}"
+              % (r_dir, r_dir, r_dir))
+    try:
+        return read_console_value(page, r_expr, timeout_ms)
+    except Exception as exc:
+        return "could not check the folder: %s" % " ".join(str(exc).split())[:150]
 
 
 def get_working_directory(page, timeout_ms=10000):

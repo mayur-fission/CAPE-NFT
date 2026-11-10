@@ -44,7 +44,8 @@ from common.result_printing import summarize_concurrent_runs
 from common.script_timings import script_timings_csv_path, write_script_timings_csv
 from common.session_naming_logic import FSYNC_SESSION_PREFIX, concurrent_session_names
 from common.session_time_report import describe_run, generate_session_time_report
-from config.config import env, evidence_dir
+from common.evidence import save_screenshot
+from config.config import env, env_list, evidence_dir
 
 pytestmark = pytest.mark.rstudio_local
 
@@ -79,6 +80,12 @@ SETUP_TIMEOUT_MIN = float(env("FSYNC_SETUP_TIMEOUT_MIN") or 10)
 NO_LIMIT_MIN = 7 * 24 * 60
 # Console lines printed per session once its R file has finished
 CONSOLE_TAIL_LINES = int(env("FSYNC_CONSOLE_TAIL_LINES", "25"))
+# Text the R file prints when its load really starts/ends; a session whose
+# console lacks any of it fails (comma-separated; "none" = no check)
+EXPECTED_OUTPUT = [t for t in env_list("FSYNC_EXPECTED_OUTPUT", ["RUN START"]) if t.lower() != "none"]
+# A console with this many lines may have dropped its first ones (RStudio
+# keeps the last ~1000), so a missing text there is only a warning
+CONSOLE_FULL_LINES = int(env("FSYNC_CONSOLE_FULL_LINES", "900"))
 POLL_INTERVAL_MS = int(env("FSYNC_POLL_MS", "500"))
 THRESHOLD_S = float(env("FSYNC_THRESHOLD_S") or 0) or None
 TIMINGS_LABEL = RUN_FOLDER
@@ -95,15 +102,32 @@ def _file_paths():
     return paths
 
 
-def _print_console_tail(page, record):
-    """Print the end of a session's console once its R file has finished:
-    the R file's own output (timings, errors it printed) in the test log."""
+def _check_run_output(page, record):
+    """Once a session's R file has finished: print the end of its console
+    (the R file's own output) in the test log, and fail the run if the
+    console lacks any of EXPECTED_OUTPUT (e.g. "RUN START": the R file
+    ended before starting its load)."""
+    name = record["session_name"]
     try:
-        tail = get_console_output(page).strip().splitlines()[-CONSOLE_TAIL_LINES:]
-        print("\n[rstudio-local] session %s: R file finished (%s); console ends with:\n%s"
-              % (record["session_name"], record.get("status"), "\n".join(tail)))
+        console = get_console_output(page)
     except Exception as exc:
-        print("\n[rstudio-local] session %s: could not read its console: %s" % (record["session_name"], exc))
+        print("\n[rstudio-local] session %s: could not read its console: %s" % (name, exc))
+        if record.get("status") == "ok":
+            record["status"] = "could not check its output: %s" % " ".join(str(exc).split())[:150]
+        return
+    tail = console.strip().splitlines()[-CONSOLE_TAIL_LINES:]
+    print("\n[rstudio-local] session %s: R file finished (%s); console ends with:\n%s"
+          % (name, record.get("status"), "\n".join(tail)))
+    missing = [text for text in EXPECTED_OUTPUT if text not in console]
+    lines = console.count("\n") + 1
+    if missing and lines >= CONSOLE_FULL_LINES:
+        # The console keeps only its last lines: on a long output the text
+        # may have scrolled away, which says nothing about the run
+        print("\n[rstudio-local] WARNING: session %s: %s not in its console, but the console is full "
+              "(%d lines) and may have dropped it - not counted as a failure" % (name, missing, lines))
+    elif missing and record.get("status") == "ok":
+        record["status"] = "R file ended without printing %s" % ", ".join(repr(t) for t in missing)
+        save_screenshot(page, "fsync_missing_output_%s.png" % name, always=True)
 
 
 def test_fsync_concurrent_sessions(browser_name, browser_type_launch_args, browser_context_args):
@@ -151,7 +175,7 @@ def test_fsync_concurrent_sessions(browser_name, browser_type_launch_args, brows
         stagger_s=BROWSER_STAGGER_S, attempts=LAUNCH_ATTEMPTS,
         launch_timeout_ms=int(LAUNCH_TIMEOUT_MIN * 60000), retry_wait_s=LAUNCH_RETRY_WAIT_S,
         delete_output=False, poll_interval_ms=POLL_INTERVAL_MS, session_folders=SESSION_FOLDERS,
-        after_run=_print_console_tail, after_prepare=_setup, after_prepare_s=sessions_per_browser * (SETUP_TIMEOUT_MIN * 60 + 300),
+        after_run=_check_run_output, after_prepare=_setup, after_prepare_s=sessions_per_browser * (SETUP_TIMEOUT_MIN * 60 + 300),
     )
 
     setup_csv = os.path.join(evidence_dir(), "fsync_setup_%s.csv" % TIMINGS_LABEL)
