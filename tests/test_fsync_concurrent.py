@@ -30,6 +30,7 @@ charts. All are attached to Allure.
 """
 import os
 import posixpath
+import re
 import threading
 import time
 
@@ -83,6 +84,11 @@ CONSOLE_TAIL_LINES = int(env("FSYNC_CONSOLE_TAIL_LINES", "25"))
 # Text the R file prints when its load really starts/ends; a session whose
 # console lacks any of it fails (comma-separated; "none" = no check)
 EXPECTED_OUTPUT = [t for t in env_list("FSYNC_EXPECTED_OUTPUT", ["RUN START"]) if t.lower() != "none"]
+# Text that means the R file's load failed even though R itself finished
+# without an error (e.g. the Python generator crashed inside system());
+# a session whose console shows any of it fails (comma-separated; "none" = no check)
+FAIL_OUTPUT = [t for t in env_list("FSYNC_FAIL_OUTPUT", ["Traceback (most recent call last)"])
+               if t.lower() != "none"]
 # A console with this many lines may have dropped its first ones (RStudio
 # keeps the last ~1000), so a missing text there is only a warning
 CONSOLE_FULL_LINES = int(env("FSYNC_CONSOLE_FULL_LINES", "900"))
@@ -119,8 +125,16 @@ def _check_run_output(page, record):
     print("\n[rstudio-local] session %s: R file finished (%s); console ends with:\n%s"
           % (name, record.get("status"), "\n".join(tail)))
     missing = [text for text in EXPECTED_OUTPUT if text not in console]
+    failed = [text for text in FAIL_OUTPUT if text in console]
     lines = console.count("\n") + 1
-    if missing and lines >= CONSOLE_FULL_LINES:
+    if failed and record.get("status") == "ok":
+        # the line after the traceback's last frame is the error itself
+        last_error = next((l.strip() for l in reversed(console.strip().splitlines())
+                           if re.match(r"\s*\w+(Error|Exception)\b", l)), "")
+        record["status"] = "R file output shows a failure (%s)%s" % (
+            ", ".join(repr(t) for t in failed), ": " + last_error[:200] if last_error else "")
+        save_screenshot(page, "fsync_failed_output_%s.png" % name, always=True)
+    elif missing and lines >= CONSOLE_FULL_LINES:
         # The console keeps only its last lines: on a long output the text
         # may have scrolled away, which says nothing about the run
         print("\n[rstudio-local] WARNING: session %s: %s not in its console, but the console is full "

@@ -104,19 +104,28 @@ def save_summary_table_png(path, head, rows, title, last_row_total=False):
         return None
     # two-line headers keep the columns narrow
     labels = [h.replace(" ", "\n", 1) if len(h) > 12 else h for h in head]
-    fig, ax = plt.subplots(figsize=(max(10, 1.25 * len(head)), 0.8 + 0.2 * title.count("\n") + 0.3 * (len(rows) + 1)))
+    # Fixed bands, top to bottom (inches): title, table, footer. The table is
+    # drawn into its own band (bbox), so it can never grow over the title.
+    row_h, header_h = 0.3, 0.5
+    title_h = 0.2 + 0.22 * (title.count("\n") + 1)
+    table_h = header_h + row_h * max(1, len(rows))
+    footer_h = 0.3
+    fig_h = title_h + table_h + footer_h
+    fig = plt.figure(figsize=(max(10, 1.25 * len(head)), fig_h))
+    fig.text(0.01, 1 - 0.1 / fig_h, title, fontsize=11, fontweight="bold", ha="left", va="top")
+    ax = fig.add_axes([0.01, footer_h / fig_h, 0.98, table_h / fig_h])
     ax.axis("off")
-    ax.set_title(title, fontsize=11, fontweight="bold", loc="left")
-    table = ax.table(cellText=rows or [[""] * len(head)], colLabels=labels, loc="center", cellLoc="center")
+    table = ax.table(cellText=rows or [[""] * len(head)], colLabels=labels, cellLoc="center",
+                     bbox=[0, 0, 1, 1])
     table.auto_set_font_size(False)
     table.set_fontsize(9)
-    table.scale(1, 1.6)
     for (r, c), cell in table.get_celld().items():
+        # bbox shares the band out by cell height: the two-line header gets more
+        cell.set_height(header_h if r == 0 else row_h)
         cell.set_edgecolor("#d0d0d0")
         if r == 0:
             cell.set_facecolor("#e8ecf2")
             cell.set_text_props(fontweight="bold")
-            cell.set_height(cell.get_height() * 1.6)
         elif last_row_total and r == len(rows):
             cell.set_facecolor("#e8ecf2")
             cell.set_text_props(fontweight="bold")
