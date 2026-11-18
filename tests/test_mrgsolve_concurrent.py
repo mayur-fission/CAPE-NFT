@@ -12,7 +12,8 @@ test_mrgsolve_setup.py first (once per user/server) to install them.
 Every run gets its own folder, <working dir> (MRGSOLVE_WORKING_DIR, else the
 folder MRGSOLVE_SCRIPT is in)/MRGSOLVE_VALIDATION_<session count>_<datetime>/
 (e.g. MRGSOLVE_VALIDATION_5_20261029-203754), and in it each session runs the script in its own
-folder: MRGSOLVE_VALIDATION_S<N> in SESSION_<N>/.
+folder: MRGSOLVE_VALIDATION_S<N> in SESSION_<N>/. Set MRGSOLVE_SESSION_SUFFIX
+(e.g. U1) to name the sessions MRGSOLVE_VALIDATION_S<N>_U1 (blank = no suffix).
 Set MRGSOLVE_OUTPUT_FILES (comma-separated, relative to the session
 folder) to the files the script writes, and a run only counts as ok if all of
 them are there afterwards (never deleted: the data stays on the server after the
@@ -52,8 +53,10 @@ pytestmark = pytest.mark.rstudio_local
 USER = int(env("CONCURRENT_SESSIONS_USER", "1"))
 SESSION_COUNT = int(env("MRGSOLVE_SESSIONS", "1"))
 BROWSER_COUNT = browsers_for(SESSION_COUNT, int(env("MRGSOLVE_SESSIONS_BROWSERS") or 0))
-SESSION_NAMES = concurrent_session_names(SESSION_COUNT, prefix=MRGSOLVE_SESSION_PREFIX)
-# MRGSOLVE_VALIDATION_S<N> writes its output to SESSION_<N>
+# Optional suffix: MRGSOLVE_SESSION_SUFFIX=U1 -> MRGSOLVE_VALIDATION_S<N>_U1 (blank = no suffix)
+SESSION_SUFFIX = env("MRGSOLVE_SESSION_SUFFIX", "")
+SESSION_NAMES = concurrent_session_names(SESSION_COUNT, prefix=MRGSOLVE_SESSION_PREFIX, suffix=SESSION_SUFFIX)
+# MRGSOLVE_VALIDATION_S<N>[_<suffix>] writes its output to SESSION_<N>
 SESSION_FOLDERS = {name: "SESSION_%d" % (i + 1) for i, name in enumerate(SESSION_NAMES)}
 # Gap between starting one browser and the next, so their logins don't clash.
 BROWSER_STAGGER_S = int(env("CONCURRENT_SESSIONS_BROWSER_STAGGER_S", "30"))

@@ -51,8 +51,10 @@ BROWSER_COUNT = browsers_for(
     SESSION_COUNT, int(env("MRGSOLVE_BATCH_SESSIONS_BROWSERS") or env("MRGSOLVE_SESSIONS_BROWSERS") or 0)
 )
 # Same names as test_mrgsolve_concurrent (MRGSOLVE_VALIDATION_S<N>): do not run both at once as one user
-SESSION_NAMES = concurrent_session_names(SESSION_COUNT, prefix=MRGSOLVE_BATCH_SESSION_PREFIX)
-# MRGSOLVE_VALIDATION_S<N> writes its output to SESSION_<N>
+# Optional suffix: MRGSOLVE_SESSION_SUFFIX=U1 -> MRGSOLVE_VALIDATION_S<N>_U1 (blank = no suffix)
+SESSION_SUFFIX = env("MRGSOLVE_SESSION_SUFFIX", "")
+SESSION_NAMES = concurrent_session_names(SESSION_COUNT, prefix=MRGSOLVE_BATCH_SESSION_PREFIX, suffix=SESSION_SUFFIX)
+# MRGSOLVE_VALIDATION_S<N>[_<suffix>] writes its output to SESSION_<N>
 SESSION_FOLDERS = {name: "SESSION_%d" % (i + 1) for i, name in enumerate(SESSION_NAMES)}
 # Gap between starting one browser and the next, so their logins don't clash.
 BROWSER_STAGGER_S = int(env("CONCURRENT_SESSIONS_BROWSER_STAGGER_S", "30"))

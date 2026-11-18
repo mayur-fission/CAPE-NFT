@@ -43,7 +43,7 @@ U1_CONCURRENT_30MIN_SESSION_PREFIX = "U1_CONCURRENT_30MIN_SESSION_"
 CONCURRENT_SMALL_10MIN_SESSION_PREFIX = "CONCURRENT_SMALL_10MIN_SESSION_"
 # test_mgsolve_10min (mrgsolve_sim.R)
 MGSOLVE_10MIN_SESSION_PREFIX = "MGSOLVE_10MIN_SESSION_"
-# test_mrgsolve_concurrent (run_mrgsolve.R): sessions MRGSOLVE_VALIDATION_S<N>, output in
+# test_mrgsolve_concurrent (run_mrgsolve.R): sessions MRGSOLVE_VALIDATION_S<N>[_<MRGSOLVE_SESSION_SUFFIX>], output in
 # MRGSOLVE_VALIDATION_<session count>_<datetime>/SESSION_<N> folders
 MRGSOLVE_SESSION_PREFIX = "MRGSOLVE_VALIDATION_S"
 # test_mrgsolve_setup (package install session)
@@ -98,9 +98,13 @@ def user_session_name_prefix(user):
 
 
 # --- Fixed names ---------------------------------------------------------------
-def concurrent_session_names(count, prefix=CONCURRENT_SESSION_PREFIX):
-    """[<prefix>1, ..., <prefix><count>]"""
-    return ["%s%d" % (prefix, i + 1) for i in range(count)]
+def concurrent_session_names(count, prefix=CONCURRENT_SESSION_PREFIX, suffix=""):
+    """[<prefix>1, ..., <prefix><count>], each followed by _<suffix> when
+    `suffix` is set (e.g. suffix "U1": <prefix>1_U1). Cleanup by prefix
+    (test_delete_sessions) still matches the suffixed names."""
+    suffix = (suffix or "").strip().strip("_")
+    tail = "_" + suffix if suffix else ""
+    return ["%s%d%s" % (prefix, i + 1, tail) for i in range(count)]
 
 
 def browser_name_prefixes(browser_count):
