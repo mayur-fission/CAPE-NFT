@@ -9,6 +9,7 @@ import csv
 import html
 import io
 import os
+import re
 import time
 
 try:
@@ -146,6 +147,14 @@ def save_summary_table_png(path, head, rows, title, last_row_total=False):
     return path
 
 
+def _session_number(session_name):
+    """Sort key: the session's number N, the first number in the name
+    (MRGSOLVE_VALIDATION_S<N>, ..._S<N>_<suffix>, MRGSOLVE_SESSION_<N>);
+    names without one sort last, by name."""
+    match = re.search(r"\d+", session_name)
+    return (0, int(match.group()), session_name) if match else (1, 0, session_name)
+
+
 def report_run_summaries(runs, label, run_description, run_dir):
     """The run summary table (SUMMARY_COLUMNS, one row per session, in
     session order): written to evidence/mrgsolve_run_summary_<label>.csv,
@@ -155,7 +164,7 @@ def report_run_summaries(runs, label, run_description, run_dir):
     closes the table."""
     head = ["Session Name"] + [header for _, header, _ in SUMMARY_COLUMNS]
     rows = []
-    for run in sorted(runs, key=lambda r: int(r["session_name"].rsplit("_", 1)[-1])):
+    for run in sorted(runs, key=lambda r: _session_number(r["session_name"])):
         summary = run.get("mrgsolve_summary") or {}
         rows.append([run["session_name"]] + [_summary_cell(summary, names, decimals) if summary else ""
                                              for names, _, decimals in SUMMARY_COLUMNS])
