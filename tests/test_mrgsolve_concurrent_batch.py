@@ -1,6 +1,6 @@
 """Like test_mrgsolve_concurrent, but in batches (as
 test_concurrent_sessions_batch_execution): MRGSOLVE_BATCH_SESSIONS sessions
-launched from the UI, named MRGSOLVE_BATCH_SESSION_1 .. _<N>, spread over
+launched from the UI, named MRGSOLVE_VALIDATION_S1 .. S<N>, spread over
 MRGSOLVE_BATCH_SESSIONS_BROWSERS browsers (blank = one browser per 5
 sessions), all logged in as one user. Each browser sources the mrgsolve
 script (MRGSOLVE_SCRIPT) in all its sessions as soon as its own sessions are
@@ -14,9 +14,9 @@ test_mrgsolve_setup.py first (once per user/server) to install them.
 
 Every run gets its own folder, <working dir> (MRGSOLVE_BATCH_WORKING_DIR,
 else MRGSOLVE_WORKING_DIR, else the folder MRGSOLVE_SCRIPT is in)/
-MRGSOLVE_BATCH_USER_<session count>_<datetime>/, and in it each session runs
+MRGSOLVE_VALIDATION_<session count>_<datetime>/, and in it each session runs
 the script in its own folder:
-MRGSOLVE_BATCH_SESSION_<N> in MRGSOLVE_OUTPUT_SESSION_<N>/. Output is never
+MRGSOLVE_VALIDATION_S<N> in SESSION_<N>/. Output is never
 deleted.
 
 Shares the other MRGSOLVE_* settings (output files, run summary, timeout,
@@ -50,10 +50,10 @@ SESSION_COUNT = int(env("MRGSOLVE_BATCH_SESSIONS") or env("MRGSOLVE_SESSIONS", "
 BROWSER_COUNT = browsers_for(
     SESSION_COUNT, int(env("MRGSOLVE_BATCH_SESSIONS_BROWSERS") or env("MRGSOLVE_SESSIONS_BROWSERS") or 0)
 )
-# Own names, so this test cannot quit test_mrgsolve_concurrent's sessions
+# Same names as test_mrgsolve_concurrent (MRGSOLVE_VALIDATION_S<N>): do not run both at once as one user
 SESSION_NAMES = concurrent_session_names(SESSION_COUNT, prefix=MRGSOLVE_BATCH_SESSION_PREFIX)
-# MRGSOLVE_BATCH_SESSION_<N> writes its output to MRGSOLVE_OUTPUT_SESSION_<N>
-SESSION_FOLDERS = {name: "MRGSOLVE_OUTPUT_SESSION_%d" % (i + 1) for i, name in enumerate(SESSION_NAMES)}
+# MRGSOLVE_VALIDATION_S<N> writes its output to SESSION_<N>
+SESSION_FOLDERS = {name: "SESSION_%d" % (i + 1) for i, name in enumerate(SESSION_NAMES)}
 # Gap between starting one browser and the next, so their logins don't clash.
 BROWSER_STAGGER_S = int(env("CONCURRENT_SESSIONS_BROWSER_STAGGER_S", "30"))
 LAUNCH_ATTEMPTS = int(env("CONCURRENT_SESSIONS_LAUNCH_ATTEMPTS", "3"))
@@ -67,7 +67,7 @@ WORKING_DIR = (env("MRGSOLVE_BATCH_WORKING_DIR") or env("MRGSOLVE_WORKING_DIR")
                or (posixpath.dirname(SCRIPT_PATH) if SCRIPT_PATH else None))
 RUN_STARTED = time.strftime("%Y%m%d-%H%M%S")
 # This run's own folder, holding the session folders
-RUN_DIR = (posixpath.join(WORKING_DIR, "MRGSOLVE_BATCH_USER_%d_%s" % (SESSION_COUNT, RUN_STARTED))
+RUN_DIR = (posixpath.join(WORKING_DIR, "MRGSOLVE_VALIDATION_%d_%s" % (SESSION_COUNT, RUN_STARTED))
            if WORKING_DIR else None)
 # Files the script writes under its session folder; all must exist for a run
 # to count as ok. Unset = no output check.
@@ -89,7 +89,7 @@ THRESHOLD_S = float(env("MRGSOLVE_THRESHOLD_S") or 0) or None
 def test_mrgsolve_concurrent_batch(browser_name, browser_type_launch_args, browser_context_args):
     """The mrgsolve R script finishes ok (with its output files, when
     MRGSOLVE_OUTPUT_FILES is set) in every session, each session's output in
-    its MRGSOLVE_OUTPUT_SESSION_<N> folder of this run's folder.
+    its SESSION_<N> folder of this run's folder.
 
     (R packages: test_mrgsolve_setup.py.)
 

@@ -43,10 +43,15 @@ U1_CONCURRENT_30MIN_SESSION_PREFIX = "U1_CONCURRENT_30MIN_SESSION_"
 CONCURRENT_SMALL_10MIN_SESSION_PREFIX = "CONCURRENT_SMALL_10MIN_SESSION_"
 # test_mgsolve_10min (mrgsolve_sim.R)
 MGSOLVE_10MIN_SESSION_PREFIX = "MGSOLVE_10MIN_SESSION_"
-# test_mrgsolve_concurrent (mrgsolve_sim.R; output in MRGSOLVE_OUTPUT_SESSION_<N> folders)
-MRGSOLVE_SESSION_PREFIX = "MRGSOLVE_SESSION_"
-# test_mrgsolve_concurrent_batch (same script, each browser starts as soon as its sessions are up)
-MRGSOLVE_BATCH_SESSION_PREFIX = "MRGSOLVE_BATCH_SESSION_"
+# test_mrgsolve_concurrent (run_mrgsolve.R): sessions MRGSOLVE_VALIDATION_S<N>, output in
+# MRGSOLVE_VALIDATION_<session count>_<datetime>/SESSION_<N> folders
+MRGSOLVE_SESSION_PREFIX = "MRGSOLVE_VALIDATION_S"
+# test_mrgsolve_setup (package install session)
+MRGSOLVE_SETUP_SESSION_NAME = "MRGSOLVE_VALIDATION_SETUP"
+# test_mrgsolve_concurrent_batch (same script and naming, each browser starts as soon as its sessions are up)
+MRGSOLVE_BATCH_SESSION_PREFIX = MRGSOLVE_SESSION_PREFIX
+# Earlier mrgsolve names, kept only so test_delete_sessions still quits sessions left under them
+LEGACY_MRGSOLVE_SESSION_PREFIXES = ("MRGSOLVE_SESSION_", "MRGSOLVE_BATCH_SESSION_")
 # test_fsync_concurrent (venv setup + uploaded R/Python files, one folder per session)
 FSYNC_SESSION_PREFIX = "FSYNC_SESSION_"
 # test_pknca_10min (pknca_nca_10min.R)
@@ -84,7 +89,7 @@ ALL_SESSION_NAME_PREFIXES = (AUTO_PERF_NAME_PREFIX, RUN_R_SESSION_NAME_PREFIX, U
                              TIDYVERSE_GGPLOT_10MIN_SESSION_PREFIX, PMT_10MIN_SESSION_PREFIX,
                              RUN_R_CLOSE_SESSION_PREFIX, BATCH_RUN_R_CLOSE_SESSION_PREFIX, FILE_CRUD_SESSION_PREFIX,
                              LOAD_FILES_SESSION_PREFIX, BACKGROUND_JOB_SESSION_PREFIX, CONCURRENT_IDLE_SESSION_PREFIX,
-                             SCENARIO_1_SESSION_PREFIX, CLEANUP_SESSION_PREFIX, FSYNC_SESSION_PREFIX)
+                             SCENARIO_1_SESSION_PREFIX, CLEANUP_SESSION_PREFIX, FSYNC_SESSION_PREFIX) + LEGACY_MRGSOLVE_SESSION_PREFIXES
 
 
 def user_session_name_prefix(user):
