@@ -157,13 +157,19 @@ def wrapper_source(script_path, session_name, suffix, session_dir, shared_dir, s
     ]
     if think_time_s and iterations > 1:
         lines.append("    if (.it > 1) Sys.sleep(%s)" % float(think_time_s))
+    script_name = posixpath.basename(script_path)
     lines += [
         "    .s <- as.numeric(Sys.time())",
+        "    message(sprintf('[mrgsolve] %%s run %%d started at %%s in session %%s', %s, .it,"
+        " format(Sys.time(), '%%Y-%%m-%%d %%H:%%M:%%OS3'), %s))" % (r_string(script_name), r_string(session_name)),
         "    .status <- tryCatch({ source(%s, local = globalenv()); 'ok' }," % r_string(script_path),
         "                        error = function(e) paste('R error:', gsub('[\\r\\n]+', ' ', conditionMessage(e))))",
         "    .e <- as.numeric(Sys.time())",
-        "    .rows <- rbind(.rows, data.frame(session = %s, suffix = %s, iteration = .it,"
-        % (r_string(session_name), r_string(suffix or "")),
+        "    message(sprintf('[mrgsolve] %%s run %%d ended at %%s in session %%s after %%.2fs (%%s)', %s, .it,"
+        " format(Sys.time(), '%%Y-%%m-%%d %%H:%%M:%%OS3'), %s, .e - .s, .status))"
+        % (r_string(script_name), r_string(session_name)),
+        "    .rows <- rbind(.rows, data.frame(session = %s, suffix = %s, script = %s, iteration = .it,"
+        % (r_string(session_name), r_string(suffix or ""), r_string(script_name)),
         "      host = Sys.info()[['nodename']], pid = Sys.getpid(), r_uptime_at_submit = sprintf('%.1f', .uptime),",
         "      scheduled_start = .scheduled, start = sprintf('%.3f', .s), end = sprintf('%.3f', .e), status = .status,",
         "      stringsAsFactors = FALSE))",
@@ -279,6 +285,13 @@ def read_server_timing(page, record):
             record["ended"] = max(r["end"] for r in rows)
             record["host"], record["pid"] = rows[0].get("host"), rows[0].get("pid")
             record["r_uptime_at_submit"] = rows[0].get("r_uptime_at_submit")
+            script = rows[0].get("script") or "mrgsolve script"
+            for row in rows:
+                delay = ("" if row.get("scheduled_start") is None
+                         else ", %.2fs after its scheduled start" % (row["start"] - row["scheduled_start"]))
+                log_step("R script %s (run %d) in session %s: started %s, ended %s, %.2fs, %s%s",
+                         script, row["iteration"], name, format_epoch(row["start"]), format_epoch(row["end"]),
+                         row["end"] - row["start"], row.get("status") or "?", delay)
             log_step("Server timing of session %s: %d run(s), %.2fs from first start to last end, on %s (pid %s)",
                      name, len(rows), record["ended"] - record["started"], record["host"], record["pid"])
         else:
