@@ -219,10 +219,11 @@ def test_mrgsolve_r_script_concurrent_new(browser_name, browser_type_launch_args
     summarize_concurrent_runs(runs, TIMINGS_LABEL, SESSION_COUNT, BROWSER_COUNT)
     report_run_summaries(runs, TIMINGS_LABEL, describe_run(SESSION_COUNT, BROWSER_COUNT, USER), RUN_DIR)
     generate_session_time_report(
-        timings_csv, title="Time taken per concurrent session (mrgsolve script, server clock)",
-        threshold=THRESHOLD_S, browser=browser_name, test_name=describe_run(SESSION_COUNT, BROWSER_COUNT, USER),
+        timings_csv, title="Time taken per concurrent session (mrgsolve script)", threshold=THRESHOLD_S,
+        browser=browser_name, test_name=describe_run(SESSION_COUNT, BROWSER_COUNT, USER),
         script=SCRIPT_PATH,
     )
+    # This workspace's concurrency and idle figures (on top of the reports above)
     rows = records_to_rows(runs, writer.info, SESSION_SUFFIX)
     stats = concurrency_stats(rows)
     stats.update(mode=MODE, start_interval_s=INTERVAL_S, iterations_per_session=ITERATIONS,
