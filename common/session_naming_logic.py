@@ -35,6 +35,8 @@ LOAD_FILES_SESSION_PREFIX = "LOAD_FILES_SESSION_"
 BACKGROUND_JOB_SESSION_PREFIX = "BACKGROUND_JOB_SESSION_"
 # test_concurrent_idle
 CONCURRENT_IDLE_SESSION_PREFIX = "CONCURRENT_IDLE_SESSION_"
+# test_create_multiple_sessions (launch, setwd, idle): CREATE_MULTIPLE_[<suffix>_]S<N>
+CREATE_MULTIPLE_SESSION_PREFIX = "CREATE_MULTIPLE_"
 # test_concurrent_scenario_1 (SCENARIO1_<workload>_<N>, common/concurrent_scenario.py)
 SCENARIO_1_SESSION_PREFIX = "SCENARIO1_"
 U1_CONCURRENT_10MIN_SESSION_PREFIX = "U1_CONCURRENT_10MIN_SESSION_"
@@ -101,7 +103,7 @@ SESSION_FOLDER_NAME_PREFIXES = (AUTO_PERF_NAME_PREFIX, RUN_R_SESSION_NAME_PREFIX
 # Every prefix any UI test names its sessions with - the default for
 # test_delete_sessions (housekeeping). MRGSOLVE_VALIDATION_ quits every
 # mrgsolve session, whatever its suffix.
-ALL_SESSION_NAME_PREFIXES = SESSION_FOLDER_NAME_PREFIXES + (MRGSOLVE_SESSION_PREFIX,)
+ALL_SESSION_NAME_PREFIXES = SESSION_FOLDER_NAME_PREFIXES + (MRGSOLVE_SESSION_PREFIX, CREATE_MULTIPLE_SESSION_PREFIX)
 
 
 def user_session_name_prefix(user):
@@ -127,6 +129,13 @@ def mrgsolve_session_names(count, suffix=""):
     suffix = _clean_suffix(suffix)
     prefix = "%s%sS" % (MRGSOLVE_NAME_ROOT, suffix + "_" if suffix else "")
     return concurrent_session_names(count, prefix=prefix)
+
+
+def create_multiple_session_names(count, suffix=""):
+    """[CREATE_MULTIPLE_[<suffix>_]S1, ..., S<count>], e.g. CREATE_MULTIPLE_U1_S1."""
+    suffix = _clean_suffix(suffix)
+    return concurrent_session_names(count, prefix="%s%sS" % (CREATE_MULTIPLE_SESSION_PREFIX,
+                                                             suffix + "_" if suffix else ""))
 
 
 def mrgsolve_run_folder_name(count, timestamp, suffix=""):

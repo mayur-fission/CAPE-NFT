@@ -1,5 +1,6 @@
 """Sessions held idle in their tabs: sessions spread over browsers (5 tabs
 each), all logged in as one user (common/concurrent_file_crud.py's flow).
+Each session can first have its working directory set (working_dir).
 Once every browser has launched its sessions, each tab is left open with
 nothing run in it until the duration is up. Every `check_interval_s` each
 browser checks its sessions for drops, two ways:
@@ -22,8 +23,10 @@ import time
 from common.concurrent_file_crud import run_loops_in_concurrent_sessions
 from common.evidence import save_screenshot
 from common.perf_report import attach_allure_file, write_json_report
-from common.rstudio_console_commands import wait_for_console_ready
+from common.launch_already_created_sessions import SETWD_ATTEMPTS, SETWD_RETRY_WAIT_S
+from common.rstudio_console_commands import recover_console, wait_for_console_ready
 from common.rstudio_session_helper import ACTIVE_STATUSES, goto_session_list, is_session_alive, load_all_session_rows
+from common.session_actions import set_session_working_directory
 from common.session_monitor import GONE, session_statuses_by_name
 from common.step_log import log_step
 from config.config import env, evidence_dir
@@ -35,10 +38,12 @@ IDLE_GRACE_S = float(env("CONCURRENT_IDLE_GRACE_S", "120"))
 
 def run_idle_in_concurrent_sessions(browser_name, launch_args, context_args, user, session_names,
                                     browser_count, label, duration_s, check_interval_s=60, stagger_s=0,
-                                    attempts=3, launch_timeout_ms=180000, retry_wait_s=15):
+                                    attempts=3, launch_timeout_ms=180000, retry_wait_s=15, working_dir=None):
     """Keep every one of `session_names` open and idle in its tab, spread
     over `browser_count` browsers (started `stagger_s` apart), from the
     moment all are ready until `duration_s` later, watching for drops.
+    With `working_dir`, each session setwd()s there first (SETWD_ATTEMPTS
+    tries); a session where that fails fails its browser.
 
     Returns (records, drops, errors): a record per session, a
     {session, status, detected_by, seconds_after_idle_start, time} dict per
@@ -49,6 +54,8 @@ def run_idle_in_concurrent_sessions(browser_name, launch_args, context_args, use
 
     def _prepare(session):
         wait_for_console_ready(session.page)
+        if working_dir:
+            _set_working_dir(session, working_dir)
         log_step("Session %s ready - it will be left idle", session.session_name)
 
     def _hold_idle(launched, records, home_url):
@@ -70,6 +77,24 @@ def run_idle_in_concurrent_sessions(browser_name, launch_args, context_args, use
         write_json_report(json_path, drops)
         attach_allure_file(json_path)
     return records, drops, errors
+
+
+def _set_working_dir(session, path):
+    """setwd(path) in `session`, retried SETWD_ATTEMPTS times; raises the
+    last error."""
+    for attempt in range(1, SETWD_ATTEMPTS + 1):
+        try:
+            set_session_working_directory(session.page, path=path)
+            log_step("Working directory set to %s in session %s", path, session.session_name)
+            return
+        except Exception as exc:
+            if attempt == SETWD_ATTEMPTS:
+                raise AssertionError("could not set the working directory to %s in session %s: %s"
+                                     % (path, session.session_name, exc))
+            log_step("Could not set the working directory in session %s (attempt %d of %d), retrying in %ds: %s",
+                     session.session_name, attempt, SETWD_ATTEMPTS, SETWD_RETRY_WAIT_S, exc)
+            session.page.wait_for_timeout(SETWD_RETRY_WAIT_S * 1000)
+            recover_console(session.page)
 
 
 def _watch_idle_sessions(launched, records, home_url, duration_s, check_interval_s, monitor_label):
