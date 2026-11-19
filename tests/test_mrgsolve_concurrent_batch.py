@@ -1,6 +1,6 @@
 """Like test_mrgsolve_concurrent, but in batches (as
 test_concurrent_sessions_batch_execution): MRGSOLVE_BATCH_SESSIONS sessions
-launched from the UI, named MRGSOLVE_VALIDATION_S1 .. S<N>, spread over
+launched from the UI, named MRGSOLVE_VALIDATION_[<suffix>_]S1 .. S<N>, spread over
 MRGSOLVE_BATCH_SESSIONS_BROWSERS browsers (blank = one browser per 5
 sessions), all logged in as one user. Each browser sources the mrgsolve
 script (MRGSOLVE_SCRIPT) in all its sessions as soon as its own sessions are
@@ -14,10 +14,9 @@ test_mrgsolve_setup.py first (once per user/server) to install them.
 
 Every run gets its own folder, <working dir> (MRGSOLVE_BATCH_WORKING_DIR,
 else MRGSOLVE_WORKING_DIR, else the folder MRGSOLVE_SCRIPT is in)/
-MRGSOLVE_VALIDATION_<session count>_<datetime>/, and in it each session runs
-the script in its own folder:
-MRGSOLVE_VALIDATION_S<N> in SESSION_<N>/. Output is never
-deleted.
+MRGSOLVE_VALIDATION[_<suffix>]_<session count>_<datetime>/, and in it each session runs
+the script in its own folder: session S<N> in SESSION_<N>/. Output is never
+deleted. <suffix> = MRGSOLVE_SESSION_SUFFIX (blank = none).
 
 Shares the other MRGSOLVE_* settings (output files, run summary, timeout,
 poll interval, threshold) with test_mrgsolve_concurrent, and the
@@ -41,7 +40,7 @@ from common.parallel_browsers import browsers_for
 from config.config import env, env_list
 from common.script_timings import script_timings_csv_path, write_script_timings_csv
 from common.session_time_report import describe_run, generate_session_time_report
-from common.session_naming_logic import MRGSOLVE_BATCH_SESSION_PREFIX, concurrent_session_names
+from common.session_naming_logic import mrgsolve_run_folder_name, mrgsolve_session_names
 
 pytestmark = pytest.mark.rstudio_local
 
@@ -50,11 +49,13 @@ SESSION_COUNT = int(env("MRGSOLVE_BATCH_SESSIONS") or env("MRGSOLVE_SESSIONS", "
 BROWSER_COUNT = browsers_for(
     SESSION_COUNT, int(env("MRGSOLVE_BATCH_SESSIONS_BROWSERS") or env("MRGSOLVE_SESSIONS_BROWSERS") or 0)
 )
-# Same names as test_mrgsolve_concurrent (MRGSOLVE_VALIDATION_S<N>): do not run both at once as one user
-# Optional suffix: MRGSOLVE_SESSION_SUFFIX=U1 -> MRGSOLVE_VALIDATION_S<N>_U1 (blank = no suffix)
+RUN_STARTED = time.strftime("%Y%m%d-%H%M%S")
+# Optional suffix (blank = none), in the session and run folder names
 SESSION_SUFFIX = env("MRGSOLVE_SESSION_SUFFIX", "")
-SESSION_NAMES = concurrent_session_names(SESSION_COUNT, prefix=MRGSOLVE_BATCH_SESSION_PREFIX, suffix=SESSION_SUFFIX)
-# MRGSOLVE_VALIDATION_S<N>[_<suffix>] writes its output to SESSION_<N>
+# MRGSOLVE_VALIDATION_[<suffix>_]S<N> - same names as test_mrgsolve_concurrent:
+# do not run both at once as one user with the same suffix
+SESSION_NAMES = mrgsolve_session_names(SESSION_COUNT, SESSION_SUFFIX)
+# Session N writes its output to SESSION_<N>
 SESSION_FOLDERS = {name: "SESSION_%d" % (i + 1) for i, name in enumerate(SESSION_NAMES)}
 # Gap between starting one browser and the next, so their logins don't clash.
 BROWSER_STAGGER_S = int(env("CONCURRENT_SESSIONS_BROWSER_STAGGER_S", "30"))
@@ -67,9 +68,9 @@ SCRIPT_PATH = env("MRGSOLVE_SCRIPT")
 # Folder the run folders go in (blank = the folder MRGSOLVE_SCRIPT is in)
 WORKING_DIR = (env("MRGSOLVE_BATCH_WORKING_DIR") or env("MRGSOLVE_WORKING_DIR")
                or (posixpath.dirname(SCRIPT_PATH) if SCRIPT_PATH else None))
-RUN_STARTED = time.strftime("%Y%m%d-%H%M%S")
-# This run's own folder, holding the session folders
-RUN_DIR = (posixpath.join(WORKING_DIR, "MRGSOLVE_VALIDATION_%d_%s" % (SESSION_COUNT, RUN_STARTED))
+# This run's own folder, holding the session folders:
+# MRGSOLVE_VALIDATION[_<suffix>]_<session count>_<datetime>
+RUN_DIR = (posixpath.join(WORKING_DIR, mrgsolve_run_folder_name(SESSION_COUNT, RUN_STARTED, SESSION_SUFFIX))
            if WORKING_DIR else None)
 # Files the script writes under its session folder; all must exist for a run
 # to count as ok. Unset = no output check.

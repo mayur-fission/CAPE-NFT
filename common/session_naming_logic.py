@@ -43,12 +43,17 @@ U1_CONCURRENT_30MIN_SESSION_PREFIX = "U1_CONCURRENT_30MIN_SESSION_"
 CONCURRENT_SMALL_10MIN_SESSION_PREFIX = "CONCURRENT_SMALL_10MIN_SESSION_"
 # test_mgsolve_10min (mrgsolve_sim.R)
 MGSOLVE_10MIN_SESSION_PREFIX = "MGSOLVE_10MIN_SESSION_"
-# test_mrgsolve_concurrent (run_mrgsolve.R): sessions MRGSOLVE_VALIDATION_S<N>[_<MRGSOLVE_SESSION_SUFFIX>], output in
-# MRGSOLVE_VALIDATION_<session count>_<datetime>/SESSION_<N> folders
-MRGSOLVE_SESSION_PREFIX = "MRGSOLVE_VALIDATION_S"
+# test_mrgsolve_concurrent / test_mrgsolve_concurrent_batch (run_mrgsolve.R):
+# sessions MRGSOLVE_VALIDATION_[<suffix>_]S<N> (mrgsolve_session_names()),
+# output in MRGSOLVE_VALIDATION[_<suffix>]_<session count>_<datetime>/SESSION_<N>
+# folders (mrgsolve_run_folder_name()); suffix = MRGSOLVE_SESSION_SUFFIX
+MRGSOLVE_NAME_ROOT = "MRGSOLVE_VALIDATION_"
+# Matches every mrgsolve session name, whatever its suffix (and
+# MRGSOLVE_VALIDATION_SETUP). Only for quitting sessions - never for folders,
+# since the run folders start with it too and their output is kept.
+MRGSOLVE_SESSION_PREFIX = MRGSOLVE_NAME_ROOT
 # test_mrgsolve_setup (package install session)
 MRGSOLVE_SETUP_SESSION_NAME = "MRGSOLVE_VALIDATION_SETUP"
-# test_mrgsolve_concurrent_batch (same script and naming, each browser starts as soon as its sessions are up)
 MRGSOLVE_BATCH_SESSION_PREFIX = MRGSOLVE_SESSION_PREFIX
 # Earlier mrgsolve names, kept only so test_delete_sessions still quits sessions left under them
 LEGACY_MRGSOLVE_SESSION_PREFIXES = ("MRGSOLVE_SESSION_", "MRGSOLVE_BATCH_SESSION_")
@@ -76,20 +81,27 @@ CLEANUP_SESSION_PREFIX = "CLEANUP_SESSION_"
 AUTOMATION_NAME_PREFIXES = (AUTO_PERF_NAME_PREFIX, RUN_R_SESSION_NAME_PREFIX, USER_SESSION_NAME_PREFIX,
                             RUN_R_CLOSE_SESSION_PREFIX, BATCH_RUN_R_CLOSE_SESSION_PREFIX)
 
+# Prefixes of the per-session folders tests leave in their output folders -
+# what test_cleanup_leftover_testdata deletes. Excludes the mrgsolve prefix:
+# mrgsolve output (MRGSOLVE_VALIDATION_* run folders) is never deleted.
+SESSION_FOLDER_NAME_PREFIXES = (AUTO_PERF_NAME_PREFIX, RUN_R_SESSION_NAME_PREFIX, USER_SESSION_NAME_PREFIX,
+                                TEST_167_NAME_PREFIX, TEST_168_NAME_PREFIX, TEST_168_MULTIPLE_TIMES_NAME_PREFIX,
+                                CONCURRENT_SESSION_PREFIX, U1_CONCURRENT_SESSION_PREFIX, CONCURRENT_BATCH_SESSION_PREFIX,
+                                CONCURRENT_10MIN_SESSION_PREFIX, CONCURRENT_30MIN_SESSION_PREFIX,
+                                U1_CONCURRENT_10MIN_SESSION_PREFIX, U1_CONCURRENT_30MIN_SESSION_PREFIX,
+                                CONCURRENT_SMALL_10MIN_SESSION_PREFIX, MGSOLVE_10MIN_SESSION_PREFIX,
+                                PKNCA_10MIN_SESSION_PREFIX,
+                                NLMIXR_10MIN_SESSION_PREFIX, SHINY_HTML_10MIN_SESSION_PREFIX,
+                                TIDYVERSE_GGPLOT_10MIN_SESSION_PREFIX, PMT_10MIN_SESSION_PREFIX,
+                                RUN_R_CLOSE_SESSION_PREFIX, BATCH_RUN_R_CLOSE_SESSION_PREFIX, FILE_CRUD_SESSION_PREFIX,
+                                LOAD_FILES_SESSION_PREFIX, BACKGROUND_JOB_SESSION_PREFIX, CONCURRENT_IDLE_SESSION_PREFIX,
+                                SCENARIO_1_SESSION_PREFIX, CLEANUP_SESSION_PREFIX,
+                                FSYNC_SESSION_PREFIX) + LEGACY_MRGSOLVE_SESSION_PREFIXES
+
 # Every prefix any UI test names its sessions with - the default for
-# test_delete_sessions (housekeeping)
-ALL_SESSION_NAME_PREFIXES = (AUTO_PERF_NAME_PREFIX, RUN_R_SESSION_NAME_PREFIX, USER_SESSION_NAME_PREFIX,
-                             TEST_167_NAME_PREFIX, TEST_168_NAME_PREFIX, TEST_168_MULTIPLE_TIMES_NAME_PREFIX,
-                             CONCURRENT_SESSION_PREFIX, U1_CONCURRENT_SESSION_PREFIX, CONCURRENT_BATCH_SESSION_PREFIX,
-                             CONCURRENT_10MIN_SESSION_PREFIX, CONCURRENT_30MIN_SESSION_PREFIX,
-                             U1_CONCURRENT_10MIN_SESSION_PREFIX, U1_CONCURRENT_30MIN_SESSION_PREFIX,
-                             CONCURRENT_SMALL_10MIN_SESSION_PREFIX, MGSOLVE_10MIN_SESSION_PREFIX, MRGSOLVE_SESSION_PREFIX,
-                             MRGSOLVE_BATCH_SESSION_PREFIX, PKNCA_10MIN_SESSION_PREFIX,
-                             NLMIXR_10MIN_SESSION_PREFIX, SHINY_HTML_10MIN_SESSION_PREFIX,
-                             TIDYVERSE_GGPLOT_10MIN_SESSION_PREFIX, PMT_10MIN_SESSION_PREFIX,
-                             RUN_R_CLOSE_SESSION_PREFIX, BATCH_RUN_R_CLOSE_SESSION_PREFIX, FILE_CRUD_SESSION_PREFIX,
-                             LOAD_FILES_SESSION_PREFIX, BACKGROUND_JOB_SESSION_PREFIX, CONCURRENT_IDLE_SESSION_PREFIX,
-                             SCENARIO_1_SESSION_PREFIX, CLEANUP_SESSION_PREFIX, FSYNC_SESSION_PREFIX) + LEGACY_MRGSOLVE_SESSION_PREFIXES
+# test_delete_sessions (housekeeping). MRGSOLVE_VALIDATION_ quits every
+# mrgsolve session, whatever its suffix.
+ALL_SESSION_NAME_PREFIXES = SESSION_FOLDER_NAME_PREFIXES + (MRGSOLVE_SESSION_PREFIX,)
 
 
 def user_session_name_prefix(user):
@@ -98,13 +110,30 @@ def user_session_name_prefix(user):
 
 
 # --- Fixed names ---------------------------------------------------------------
-def concurrent_session_names(count, prefix=CONCURRENT_SESSION_PREFIX, suffix=""):
-    """[<prefix>1, ..., <prefix><count>], each followed by _<suffix> when
-    `suffix` is set (e.g. suffix "U1": <prefix>1_U1). Cleanup by prefix
-    (test_delete_sessions) still matches the suffixed names."""
-    suffix = (suffix or "").strip().strip("_")
-    tail = "_" + suffix if suffix else ""
-    return ["%s%d%s" % (prefix, i + 1, tail) for i in range(count)]
+def concurrent_session_names(count, prefix=CONCURRENT_SESSION_PREFIX):
+    """[<prefix>1, ..., <prefix><count>]"""
+    return ["%s%d" % (prefix, i + 1) for i in range(count)]
+
+
+def _clean_suffix(suffix):
+    return (suffix or "").strip().strip("_")
+
+
+def mrgsolve_session_names(count, suffix=""):
+    """[MRGSOLVE_VALIDATION_[<suffix>_]S1, ..., S<count>]
+    e.g. MRGSOLVE_VALIDATION_U1_S1 (no suffix: MRGSOLVE_VALIDATION_S1).
+    Fixed names (no datetime), so a run quits the sessions an earlier run
+    with the same suffix left behind before launching its own."""
+    suffix = _clean_suffix(suffix)
+    prefix = "%s%sS" % (MRGSOLVE_NAME_ROOT, suffix + "_" if suffix else "")
+    return concurrent_session_names(count, prefix=prefix)
+
+
+def mrgsolve_run_folder_name(count, timestamp, suffix=""):
+    """MRGSOLVE_VALIDATION[_<suffix>]_<count>_<timestamp>
+    e.g. MRGSOLVE_VALIDATION_U1_10_20261119-101500 (no suffix: MRGSOLVE_VALIDATION_10_20261119-101500)."""
+    suffix = _clean_suffix(suffix)
+    return "MRGSOLVE_VALIDATION%s_%d_%s" % ("_" + suffix if suffix else "", count, timestamp)
 
 
 def browser_name_prefixes(browser_count):

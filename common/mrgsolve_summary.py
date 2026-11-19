@@ -148,11 +148,11 @@ def save_summary_table_png(path, head, rows, title, last_row_total=False):
 
 
 def _session_number(session_name):
-    """Sort key: the session's number N, the first number in the name
-    (MRGSOLVE_VALIDATION_S<N>, ..._S<N>_<suffix>, MRGSOLVE_SESSION_<N>);
+    """Sort key: the session's number N, the last number in the name
+    (MRGSOLVE_VALIDATION_[<suffix>_]S<N>, MRGSOLVE_SESSION_<N>);
     names without one sort last, by name."""
-    match = re.search(r"\d+", session_name)
-    return (0, int(match.group()), session_name) if match else (1, 0, session_name)
+    match = re.search(r"(\d+)\D*$", session_name)
+    return (0, int(match.group(1)), session_name) if match else (1, 0, session_name)
 
 
 def report_run_summaries(runs, label, run_description, run_dir):

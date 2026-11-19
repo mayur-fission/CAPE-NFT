@@ -4,7 +4,8 @@ server, through the IDE's Files pane (common/files_pane.py).
 One session (CLEANUP_SESSION_<N>) is launched, and each cleanup folder is
 searched (list.files) for names the tests use:
   - in every output folder: per-session folders named after a session
-    (every session_naming_logic prefix, AUTO_API_SESSION_, with or without
+    (every session_naming_logic folder prefix - not the mrgsolve run
+    folders, whose output is kept - AUTO_API_SESSION_, with or without
     a B<n>_/N<n>_ browser/node prefix) and the scripts' pmx_sim_output*
     folders
   - in <RSTUDIO_WORKING_DIR>/auto_test: the text file tests' text_file_*.txt
@@ -38,7 +39,7 @@ from common.rstudio_session_helper import goto_session_list, load_all_session_ro
 from common.rstudio_text_operations import TEXT_FILE_SAVE_FOLDER
 from common.session_actions import WORKING_DIR, launch_session_with_retries, login_and_plan_session_names
 from common.session_cleanup import cleanup_multiple_sessions
-from common.session_naming_logic import ALL_SESSION_NAME_PREFIXES, CLEANUP_SESSION_PREFIX
+from common.session_naming_logic import CLEANUP_SESSION_PREFIX, SESSION_FOLDER_NAME_PREFIXES
 from config.config import env, env_list
 
 pytestmark = pytest.mark.rstudio_local
@@ -52,7 +53,7 @@ OUTPUT_FOLDERS = env_list("CLEANUP_FOLDERS") or list(dict.fromkeys(
     os.environ[name].rstrip("/") or "/" for name in _OUTPUT_DIR_SETTINGS if os.environ.get(name)))
 # Per-session folders (<output dir>/<session name>, optionally B1_/N1_
 # prefixed) and the scripts' own output folders
-SESSION_FOLDER_PATTERN = "^([BN][0-9]+_)*(%s)" % "|".join(ALL_SESSION_NAME_PREFIXES + (API_SESSION_NAME_PREFIX,))
+SESSION_FOLDER_PATTERN = "^([BN][0-9]+_)*(%s)" % "|".join(SESSION_FOLDER_NAME_PREFIXES + (API_SESSION_NAME_PREFIX,))
 OUTPUT_PATTERNS = [SESSION_FOLDER_PATTERN, "^pmx_sim_output"] + env_list("CLEANUP_EXTRA_PATTERNS", [])
 # Set: only these patterns, only in the output folders (no auto_test search)
 ONLY_PATTERNS = env_list("CLEANUP_PATTERNS")
