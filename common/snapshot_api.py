@@ -4,8 +4,10 @@ done, read its details - and record how long it took
 
 Base URL: API_BASE_URL in .env (required), e.g. https://<host>. Auth:
 "Authorization: Bearer <TOKEN>" with TOKEN from .env (git ignores .env). A JWT's
-expiry is checked up front; HTTP 401/403 fails at once (token rejected or
-expired), it is not retried.
+expiry is checked up front. On HTTP 401/403 (token rejected or expired)
+SnapshotApi.on_auth_error, when set, is asked for a new token and the request
+is repeated with it (the test asks the user on the console - see
+common/snapshot_token.py); otherwise it fails at once.
 
     API 1  trigger  POST /api/v1/projects/{project_id}/snapshots
                     {"name": ..., "comment": ..., "is_major": false} -> snapshot id
@@ -35,7 +37,7 @@ import os
 import re
 import time
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 
 import requests
 
@@ -112,9 +114,13 @@ REQUEST_TIMEOUT_S = 60
 
 # Shared by every run, so runs can be compared (one row per run)
 RESULTS_CSV = os.path.join(EVIDENCE_ROOT, "snapshot_times.csv")
-RESULT_FIELDS = ("run_stamp", "scenario", "status", "project_id", "snapshot_id", "created_snapshot_id",
-                 "snapshot_version", "data_action", "data_gb", "data_percent", "data_files", "data_seconds",
-                 "snapshot_size", "queue_wait_s", "snapshot_duration_s", "snapshot_started_at", "snapshot_ended_at",
+# The job's longest steps, given their own columns (seconds, from the poll history - see step_durations())
+CRITICAL_STEPS = ("committing", "uploading")
+RESULT_FIELDS = ("run_stamp", "scenario", "target_gb", "status", "project_id", "snapshot_id",
+                 "created_snapshot_id", "snapshot_version", "data_action", "data_gb", "data_percent",
+                 "data_files", "data_seconds",
+                 "snapshot_size", "queue_wait_s", "snapshot_duration_s", "committing_s", "uploading_s",
+                 "snapshot_started_at", "snapshot_ended_at",
                  "client_duration_s", "polls", "poll_interval_s", "list_check", "triggered_at_utc", "error")
 
 
@@ -205,6 +211,14 @@ def project_id_from_path(path: Optional[str]) -> Optional[str]:
     return None
 
 
+def clean_token(value: Optional[str]) -> str:
+    """`value` without spaces, quotes or a "Bearer " prefix around it."""
+    token = (value or "").strip().strip("\"'").strip()
+    if token.lower().startswith("bearer "):
+        token = token[len("bearer "):].strip()
+    return token
+
+
 def token_expiry(token: str) -> Optional[datetime]:
     """When the JWT `token` expires (its "exp" claim, UTC), read without
     verifying it; None if the token is not a JWT or has no exp."""
@@ -241,22 +255,16 @@ class SnapshotApi:
         if not self.base_url:
             raise SnapshotError("API_BASE_URL is not set: put the snapshot API base URL in .env, "
                                 "e.g. API_BASE_URL=https://<host>")
-        token = (token or env("TOKEN") or "").strip()
-        if token.lower().startswith("bearer "):
-            token = token[len("bearer "):].strip()
-        if not token:
-            raise SnapshotAuthError("TOKEN is not set: put the snapshot API bearer token in .env as TOKEN=<token>")
-        self.token_expires_at = token_expiry(token)
-        left = self.token_seconds_left()
-        if left is not None and left <= 0:
-            raise SnapshotAuthError("TOKEN expired at %s UTC: put a new token in .env"
-                                    % self.token_expires_at.strftime("%Y-%m-%d %H:%M:%S"))
-        if left is not None:
-            log_step("TOKEN is valid for %.0f more minutes", left / 60.0)
         self.timeout_s = timeout_s
         self.session = requests.Session()
-        self.session.headers.update({"Accept": "application/json", "Content-Type": "application/json",
-                                     "Authorization": "Bearer %s" % token})
+        self.session.headers.update({"Accept": "application/json", "Content-Type": "application/json"})
+        self.token_expires_at: Optional[datetime] = None
+        self.set_token(token or env("TOKEN"))
+        # Called with the reason when the API rejects the token (HTTP 401/403): returns a new token to
+        # repeat the request with, or None to fail (the test asks the user - common/snapshot_token.py)
+        self.on_auth_error: Optional[Callable[[str], Optional[str]]] = None
+        # Called with a replacement token once a request with it succeeded (e.g. to save it)
+        self.on_new_token: Optional[Callable[[str], None]] = None
         self.triggered_at: Optional[float] = None
         self.polls = 0
         # one entry per status poll: {"poll", "elapsed_s", "at_utc", "state", "step", "step_number",
@@ -269,6 +277,31 @@ class SnapshotApi:
         self.status_urls: dict = {}
         self.last_list: Optional[dict] = None  # the last snapshot list page (API 3), for its "total"
 
+    def set_token(self, token: Optional[str]):
+        """Use `token` (a "Bearer " prefix and quotes are dropped) for the
+        requests from now on. Raises SnapshotAuthError when it is empty, or a
+        JWT that has already expired. The token is never logged."""
+        token = clean_token(token)
+        if not token:
+            raise SnapshotAuthError("TOKEN is not set: put the snapshot API bearer token in .env as TOKEN=<token>")
+        expires_at = token_expiry(token)
+        if expires_at is not None and expires_at <= datetime.now(timezone.utc):
+            raise SnapshotAuthError("the token expired at %s UTC" % expires_at.strftime("%Y-%m-%d %H:%M:%S"))
+        self.token_expires_at = expires_at
+        self.session.headers["Authorization"] = "Bearer %s" % token
+        left = self.token_seconds_left()
+        if left is not None:
+            log_step("Snapshot API token is valid for %.0f more minutes", left / 60.0)
+
+    def check_token(self, project_id: Optional[str] = None):
+        """Read the first page of the snapshot list: raises SnapshotAuthError
+        when the API rejects the token (on_auth_error is not asked)."""
+        ask, self.on_auth_error = self.on_auth_error, None
+        try:
+            self.list_snapshots(1, project_id)
+        finally:
+            self.on_auth_error = ask
+
     def token_seconds_left(self) -> Optional[float]:
         """Seconds until the token expires, if it is a JWT with an expiry."""
         if self.token_expires_at is None:
@@ -279,16 +312,33 @@ class SnapshotApi:
 
     def _request(self, method: str, path: str, **kwargs) -> dict:
         """`method` {base_url}{path}; the parsed JSON body ({} when empty).
-        Raises SnapshotAuthError on HTTP 401/403, requests.HTTPError (with
-        the body) on another error status."""
+        On HTTP 401/403 asks on_auth_error for a new token and repeats the
+        request with it, as long as one is given; raises SnapshotAuthError
+        when none is. Raises requests.HTTPError (with the body) on another
+        error status."""
         url = self.base_url + path
-        resp = self.session.request(method, url, timeout=self.timeout_s, **kwargs)
-        if resp.status_code in (401, 403):
+        replaced = None
+        while True:
+            resp = self.session.request(method, url, timeout=self.timeout_s, **kwargs)
+            if resp.status_code not in (401, 403):
+                break
             left = self.token_seconds_left()
-            raise SnapshotAuthError("%s %s -> HTTP %d: TOKEN rejected%s. Put a new TOKEN in .env. "
-                                    "Reply: %s" % (method, url, resp.status_code,
-                                                   " (it expired %.0f min ago)" % (-left / 60.0)
-                                                   if left is not None and left <= 0 else "", resp.text[:300]))
+            problem = "%s %s -> HTTP %d: token rejected%s. Reply: %s" % (
+                method, url, resp.status_code,
+                " (it expired %.0f min ago)" % (-left / 60.0) if left is not None and left <= 0 else "",
+                resp.text[:300])
+            log_step("Snapshot API: %s", problem)
+            new_token = self.on_auth_error(problem) if self.on_auth_error else None
+            if not new_token:
+                raise SnapshotAuthError(problem + " Put a new TOKEN in .env.")
+            try:
+                self.set_token(new_token)
+                replaced = clean_token(new_token)
+                log_step("Snapshot API: repeating %s %s with the new token", method, url)
+            except SnapshotAuthError as exc:
+                log_step("Snapshot API: the new token is not usable: %s", exc)
+        if replaced and self.on_new_token:
+            self.on_new_token(replaced)
         if not resp.ok:
             raise requests.HTTPError("%s %s -> HTTP %d: %s" % (method, url, resp.status_code, resp.text[:500]),
                                      response=resp)
@@ -575,15 +625,24 @@ def duration_s(start, end) -> Optional[float]:
 # -- results -------------------------------------------------------------------
 
 
+def result_file_name(result: dict) -> str:
+    """snapshot_time_<scenario>_<size>gb.json (e.g. snapshot_time_add_2gb.json);
+    without a size snapshot_time_<scenario>.json, without a scenario snapshot_time.json."""
+    if not result.get("scenario"):
+        return "snapshot_time.json"
+    size = result.get("target_gb")
+    return "snapshot_time_%s%s.json" % (result["scenario"], "_%sgb" % ("%g" % float(size)).replace(".", "p")
+                                        if size not in (None, "") else "")
+
+
 def record_snapshot_result(result: dict) -> str:
     """Log `result`, write it as snapshot_time_<scenario>.json in this test file's
     evidence folder (attached to Allure), and append it to the shared
     evidence/snapshot_times.csv (one row per run, for comparing runs).
     Returns the JSON file's path."""
     log_step("Snapshot result: %s", json.dumps(result))
-    # one file per scenario: several scenarios of one run share the evidence folder
-    json_path = os.path.join(evidence_dir(), "snapshot_time_%s.json" % result["scenario"]
-                             if result.get("scenario") else "snapshot_time.json")
+    # one file per scenario and size: several of them share one run's evidence folder
+    json_path = os.path.join(evidence_dir(), result_file_name(result))
     write_json_report(json_path, result)
     attach_allure_file(json_path)
 
@@ -593,7 +652,8 @@ def record_snapshot_result(result: dict) -> str:
         writer = csv.DictWriter(fh, fieldnames=RESULT_FIELDS, extrasaction="ignore")
         if new_file:
             writer.writeheader()
-        writer.writerow(dict(result, run_stamp=RUN_STAMP))
+        steps = result.get("step_durations_s") or {}
+        writer.writerow(dict(result, run_stamp=RUN_STAMP, **{s + "_s": steps.get(s) for s in CRITICAL_STEPS}))
     attach_allure_file(RESULTS_CSV)
     log_step("Snapshot result written to %s and %s", json_path, RESULTS_CSV)
     try:  # the tabular report of all runs; a report problem must not fail the run
@@ -609,7 +669,9 @@ def record_snapshot_result(result: dict) -> str:
 def _upgrade_results_csv():
     """Rewrite RESULTS_CSV with today's RESULT_FIELDS header when it was
     written with an older one, keeping its rows (a column it lacks is left
-    empty; rows from before the scenario column were add runs)."""
+    empty; rows from before the scenario column were add runs; the critical
+    step times and the cycle's data size, target_gb, are filled in from the
+    run's saved JSON and its add / remove rows)."""
     if not os.path.exists(RESULTS_CSV):
         return
     with open(RESULTS_CSV, newline="", encoding="utf-8") as fh:
@@ -618,14 +680,54 @@ def _upgrade_results_csv():
             return
         old_header = "scenario" not in (reader.fieldnames or ())
         rows = list(reader)
+    # the data size of each run's cycle: what its add made or its remove deleted
+    cycle_gb = {}
+    for row in rows:
+        if row.get("data_gb") and (row.get("data_action") or row.get("scenario") or "add") in ("add", "remove"):
+            cycle_gb.setdefault(row.get("run_stamp"), row["data_gb"])
     for row in rows:
         if old_header:
             row.setdefault("scenario", "add")
             row.setdefault("data_action", "add")
         if not row.get("list_check") and row.get("status") in SUCCESS_STATUSES:
             row["list_check"] = "passed"  # rows were only written after the list check passed
+        saved = _saved_result(row)
+        if not any(row.get(s + "_s") for s in CRITICAL_STEPS):
+            steps = saved.get("step_durations_s") or step_durations(saved.get("poll_history"))
+            row.update({s + "_s": steps.get(s) for s in CRITICAL_STEPS})
+        if not row.get("target_gb"):
+            size = saved.get("target_gb") or cycle_gb.get(row.get("run_stamp"))
+            if not size and _num(row.get("data_gb")) and _num(row.get("data_percent")):
+                # a modify run on its own: the folder's size = the bytes changed / the share changed
+                size = _num(row["data_gb"]) * 100.0 / _num(row["data_percent"])
+            row["target_gb"] = "%g" % round(float(size), 1) if size else ""
     with open(RESULTS_CSV, "w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=RESULT_FIELDS, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
     log_step("Upgraded %s to the columns %s (%d row(s) kept)", RESULTS_CSV, ", ".join(RESULT_FIELDS), len(rows))
+
+
+def _num(value) -> Optional[float]:
+    """`value` as a float; None when it is empty or not a number."""
+    try:
+        return float(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _saved_result(row: dict) -> dict:
+    """A CSV row's saved snapshot_time*.json (matched by run stamp and job
+    id); {} when there is none."""
+    import glob
+
+    pattern = os.path.join(EVIDENCE_ROOT, "runs", "%s_*" % row.get("run_stamp", ""), "snapshot_time*.json")
+    for path in glob.glob(pattern):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if str(data.get("snapshot_id")) == str(row.get("snapshot_id")):
+            return data
+    return {}

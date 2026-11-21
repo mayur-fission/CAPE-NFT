@@ -134,7 +134,9 @@ Settings (in `.env` or the environment):
 **Required**
 - `SNAPSHOT_PROJECT_DIR`: the project folder on the server, e.g. `/mnt/fsx/CAPE_2026_11_0223`. The project ID comes from its name: `CAPE_2026_11_0223` is project 223.
 - `API_BASE_URL`: the snapshot API's base URL, e.g. `https://<host>`.
-- `TOKEN`: the snapshot API's bearer token, sent as `Authorization: Bearer <TOKEN>`. Keep it in `.env`, which git ignores; a `Bearer ` prefix is stripped. If it is a JWT, the test fails at the start when it has expired and warns when it would expire during the wait. HTTP 401/403 fails at once.
+- `TOKEN`: the snapshot API's bearer token, sent as `Authorization: Bearer <TOKEN>`. Keep it in `.env`, which git ignores; a `Bearer ` prefix is stripped. If it is a JWT, an expired one is rejected at the start.
+  - **Token prompt** (`common/snapshot_token.py`): before the first test the run asks for the token on the console (hidden input; Enter keeps `TOKEN`) and checks it against the snapshot list API before any data changes; a rejected token is asked for again (3 tries). If the API rejects the token mid-test (HTTP 401/403, e.g. it expired during a long snapshot), the run asks for a new one and repeats the request with it instead of failing; Enter fails the test. The snapshot time is unaffected (it comes from the server's start/end times). A new token is used for the rest of the run and saved to `.env` as `TOKEN` (`SNAPSHOT_TOKEN_SAVE=0`: this run only).
+  - No console (Jenkins, the VS Code test explorer, `pytest -n`) or `SNAPSHOT_TOKEN_PROMPT=0`: nobody is asked, `TOKEN` is used and HTTP 401/403 fails at once. `SNAPSHOT_TOKEN_PROMPT=1` always asks.
 
 **Optional**
 - `PROJECT_ID`: set it only if the folder name doesn't give the ID. When both are set they must match.
@@ -142,7 +144,7 @@ Settings (in `.env` or the environment):
 - `SNAPSHOT_SESSION_NAME`: the project's existing session. Defaults to `TEST_SNAPSHOT_NFR` (`common/session_naming_logic.py`).
 
 **Data**
-- `SNAPSHOT_DATA_GB`: decimal GB, default 1. The minimum is 1 and the maximum 1000.
+- `SNAPSHOT_DATA_GB`: decimal GB, default 1. The minimum is 1 and the maximum 1000. A comma-separated sequence such as `1,2,5,10,25,50` runs one full add -> modify -> remove cycle per size, in the order given (1 GB add, modify, remove, then 2 GB add, modify, remove, ...). Test ids end in the size (`test_snapshot_after_adding_data[2GB-chromium]`), so `-k 2GB` runs one size. The data and snapshot timeouts grow with the size: at least 120 s and 240 s per GB. Results carry the size (`target_gb` in the CSV, `snapshot_time_<scenario>_<size>gb.json`), and the report adds a "Snapshot time by data size" table.
 - `SNAPSHOT_DATA_SEED`: the script's seed (its default is 1). The same size and seed always give the same bytes.
 - `SNAPSHOT_DATA_CLEAN`: set it to `1` to empty `SNAPSHOT_DATA_DIR` before generating. Without it, a folder that isn't empty fails the test.
 - `SNAPSHOT_DATA_SCRIPT`: the local generator script, uploaded before it runs. Default `common/make_client_shape.py`.

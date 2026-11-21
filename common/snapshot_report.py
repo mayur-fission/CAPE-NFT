@@ -8,8 +8,9 @@ writes:
     evidence/snapshot_report.html   styled tables, for sharing / Allure
     evidence/snapshot_report.md     the same tables in Markdown
 
-Sections: overview, key findings, summary by scenario, latest cycle, all runs, step
-breakdown, size change in the snapshot list, test data, failures, method and settings.
+Sections: overview, key findings, snapshot time by data size (SNAPSHOT_DATA_GB with
+several sizes), summary by size and scenario, committing and uploading, latest run, all
+runs, step breakdown, test data, failures, method and settings.
 
 The test rewrites the report after every scenario (record_snapshot_result). By hand:
 
@@ -35,9 +36,13 @@ REPORT_MD = os.path.join(EVIDENCE_ROOT, "snapshot_report.md")
 
 SCENARIO_ORDER = {"add": 0, "modify": 1, "remove": 2}
 SCENARIO_LABEL = {"add": "Add data", "modify": "Modify data", "remove": "Remove data"}
-# The snapshot job's steps, in order (API 2's "step", step_number/step_count 6)
-STEP_ORDER = ("waiting", "cloning", "committing", "uploading", "listing", "checksum")
+# The snapshot job's steps, in order (API 2's "step", step_number/step_count 6): 1 waiting, 2 cloning,
+# 3 committing, 4 uploading, 5 saving, 6 checksum - the last poll's step once the state is "succeeded".
+# Saving is short and usually falls between two 10 s polls, so it seldom gets its own time.
+STEP_ORDER = ("waiting", "cloning", "committing", "uploading", "saving", "checksum")
 SUCCESS = {"success", "succeeded", "completed"}
+# The longest steps, reported on their own
+CRITICAL_STEPS = ("committing", "uploading")
 
 
 # -- reading -------------------------------------------------------------------
@@ -58,8 +63,15 @@ def size_gb(text) -> Optional[float]:
     return float(m.group(1)) * factor
 
 
+def _size_key(value) -> Optional[str]:
+    """2.0 / "2" / "2.0" -> "2"; None when there is no size."""
+    number = _num(value)
+    return "%g" % number if number is not None else None
+
+
 def _run_jsons() -> dict:
-    """{(run_stamp, scenario): saved result} from every snapshot_time*.json."""
+    """{(run_stamp, scenario, size): saved result} from every snapshot_time*.json
+    (size None for results saved before the size sequence)."""
     found = {}
     for path in glob.glob(os.path.join(RUNS_DIR, "*_test_project_snapshot_time", "snapshot_time*.json")):
         stamp = os.path.basename(os.path.dirname(path)).split("_test_project_snapshot_time")[0]
@@ -68,7 +80,7 @@ def _run_jsons() -> dict:
                 data = json.load(fh)
         except (OSError, ValueError):
             continue
-        found[(stamp, data.get("scenario") or "add")] = data
+        found[(stamp, data.get("scenario") or "add", _size_key(data.get("target_gb")))] = data
     return found
 
 
@@ -83,11 +95,13 @@ def load_runs() -> list:
     runs = []
     for row in rows:
         scenario = row.get("scenario") or "add"
-        detail = saved.get((row.get("run_stamp"), scenario), {})
+        key = (row.get("run_stamp"), scenario)
+        detail = saved.get(key + (_size_key(row.get("target_gb")),)) or saved.get(key + (None,), {})
         run = dict(detail)
         run.update({k: v for k, v in row.items() if v not in (None, "")})
         run["scenario"] = scenario
-        for key in ("data_gb", "data_percent", "data_files", "data_seconds", "queue_wait_s", "snapshot_duration_s",
+        for key in ("target_gb", "data_gb", "data_percent", "data_files", "data_seconds", "queue_wait_s",
+                    "snapshot_duration_s",
                     "client_duration_s", "polls", "poll_interval_s", "data_bytes", "created_snapshot_id"):
             run[key] = _num(run.get(key))
         if run.get("queue_wait_s") is None:
@@ -96,7 +110,9 @@ def load_runs() -> list:
         run["size_gb"] = size_gb(run.get("snapshot_size"))
         run["ok"] = str(run.get("status", "")).lower() in SUCCESS
         runs.append(run)
-    runs.sort(key=lambda r: (r.get("run_stamp", ""), SCENARIO_ORDER.get(r["scenario"], 9)))
+    # in the order they ran: by run, then by trigger time (size by size), add/modify/remove
+    runs.sort(key=lambda r: (r.get("run_stamp", ""), r.get("triggered_at_utc") or "",
+                             SCENARIO_ORDER.get(r["scenario"], 9)))
     _add_size_deltas(runs)
     return runs
 
@@ -165,6 +181,17 @@ def change_text(run) -> str:
     return "%s%.2f GB changed%s" % ("%g%% = " % pct if pct else "", size, files_text)
 
 
+def size_text(run) -> str:
+    """The cycle's data size: '2 GB'; '' when unknown."""
+    return "%g GB" % run["target_gb"] if run.get("target_gb") is not None else ""
+
+
+def _groups(runs: list) -> list:
+    """[(size, scenario)] present in `runs`: sizes ascending, add/modify/remove."""
+    return sorted({(r.get("target_gb"), r["scenario"]) for r in runs},
+                  key=lambda g: (g[0] if g[0] is not None else -1, SCENARIO_ORDER.get(g[1], 9)))
+
+
 def utc_short(value) -> str:
     t = _parse_time(value)
     return t.strftime("%Y-%m-%d %H:%M:%S UTC") if t else (value or "")
@@ -182,49 +209,100 @@ def _tables(runs: list) -> list:
     failed = [r for r in runs if not r["ok"]]
     sections = []
 
-    # Summary by scenario
+    # Snapshot time by data size (only worth a table with more than one size)
+    sizes = sorted({r["target_gb"] for r in runs if r.get("target_gb") is not None})
+    if len(sizes) > 1:
+        rows = []
+        for size in sizes:
+            row = [size_text({"target_gb": size})]
+            for sc in ("add", "modify", "remove"):
+                t = [r["snapshot_duration_s"] for r in runs if r["ok"] and r.get("target_gb") == size
+                     and r["scenario"] == sc and r.get("snapshot_duration_s")]
+                row.append(secs(stat(t, mean)))
+            adds = [r for r in runs if r["ok"] and r.get("target_gb") == size and r["scenario"] == "add"
+                    and r.get("snapshot_duration_s")]
+            row.append("%.1f s/GB" % mean(r["snapshot_duration_s"] / size for r in adds) if adds else "")
+            row.append(secs(stat([r["steps"].get("committing") for r in adds], mean)))
+            row.append(secs(stat([r["steps"].get("uploading") for r in adds], mean)))
+            rows.append(row)
+        sections.append(("Snapshot time by data size", "Average snapshot time of each size's cycle "
+                         "(SNAPSHOT_DATA_GB), successful runs only.",
+                         ["Data size", "Add", "Modify", "Remove", "Add per GB", "Add: committing",
+                          "Add: uploading"], rows,
+                         "Add per GB = the add snapshot time / the size: flat means the snapshot time grows in "
+                         "step with the data, falling means a fixed overhead dominates small sizes."))
+
+    # Summary by size and scenario
     rows = []
-    for sc in sorted({r["scenario"] for r in runs}, key=lambda s: SCENARIO_ORDER.get(s, 9)):
-        all_sc = [r for r in runs if r["scenario"] == sc]
+    for size, sc in _groups(runs):
+        all_sc = [r for r in runs if r["scenario"] == sc and r.get("target_gb") == size]
         good = [r for r in all_sc if r["ok"]]
         times = [r["snapshot_duration_s"] for r in good]
         rate = [r["data_gb"] / (r["snapshot_duration_s"] / 60.0) for r in good
                 if r.get("data_gb") and r.get("snapshot_duration_s")]
-        rows.append([SCENARIO_LABEL.get(sc, sc), len(all_sc), len(good), len(all_sc) - len(good),
+        rows.append([size_text({"target_gb": size}), SCENARIO_LABEL.get(sc, sc), len(all_sc), len(good),
+                     len(all_sc) - len(good),
                      secs(stat(times, min)), secs(stat(times, mean)), secs(stat(times, max)),
                      secs(stat([r["queue_wait_s"] for r in good], mean)),
                      secs(stat([r["client_duration_s"] for r in good], mean)),
                      gb(stat([r["data_gb"] for r in good], mean)),
                      "%.2f GB/min" % stat(rate, mean) if rate else ""])
-    sections.append(("Summary by scenario", "Successful runs only for the times; failed runs are counted.",
-                     ["Scenario", "Runs", "Passed", "Failed", "Snapshot time min", "avg", "max",
+    sections.append(("Summary by size and scenario",
+                     "Successful runs only for the times; failed runs are counted.",
+                     ["Data size", "Scenario", "Runs", "Passed", "Failed", "Snapshot time min", "avg", "max",
                       "Queue wait avg", "Trigger to success avg", "Data changed avg", "Data changed per min"],
                      rows, "Snapshot time = finished_at - started_at from the snapshot status API (server side, "
                            "excludes the queue). Trigger to success = the test's own clock, from the create call to "
                            "the poll that saw success (includes the queue, up to one poll interval late)."))
 
+    # Critical steps: committing and uploading take most of every snapshot
+    rows = []
+    for size, sc in _groups(runs):
+        good = [r for r in runs if r["scenario"] == sc and r.get("target_gb") == size and r["ok"]
+                and r.get("snapshot_duration_s")]
+        row = [size_text({"target_gb": size}), SCENARIO_LABEL.get(sc, sc), len(good)]
+        for step in CRITICAL_STEPS:
+            t = [r["steps"][step] for r in good if r["steps"].get(step)]
+            row += [secs(stat(t, min)), secs(stat(t, mean)), secs(stat(t, max)),
+                    "%d of %d" % (len(t), len(good)) if len(t) < len(good) else ""]
+        both = [sum(r["steps"].get(s) or 0 for s in CRITICAL_STEPS) / r["snapshot_duration_s"] for r in good]
+        row.append("%.0f%%" % (100 * mean(both)) if both else "")
+        rows.append(row)
+    if rows:
+        sections.append((
+            "Committing and uploading", "The two longest steps of the snapshot job (steps 3 and 4 of 6), "
+            "successful runs only.",
+            ["Data size", "Scenario", "Runs", "Committing min", "avg", "max", "Seen in", "Uploading min", "avg", "max",
+             "Seen in", "Share of snapshot time"], rows,
+            "Times come from the status polls, so each is accurate to one poll interval; lower "
+            "SNAPSHOT_POLL_INTERVAL_S for finer times. \"Seen in\" counts the runs where a poll caught the step: "
+            "a step shorter than one poll interval, or the last step before the job finished, gets no time."))
+
     # Latest cycle
     if runs:
         last_stamp = runs[-1].get("run_stamp")
         cycle = [r for r in runs if r.get("run_stamp") == last_stamp]
-        rows = [[SCENARIO_LABEL.get(r["scenario"], r["scenario"]), r.get("status", ""), change_text(r),
+        rows = [[size_text(r), SCENARIO_LABEL.get(r["scenario"], r["scenario"]), r.get("status", ""), change_text(r),
                  secs(r.get("data_seconds")), r.get("snapshot_id", ""), r.get("created_snapshot_id") and
                  "%d" % r["created_snapshot_id"] or "", secs(r["queue_wait_s"]), secs(r.get("snapshot_duration_s")),
+                 secs((r["steps"] or {}).get("committing")), secs((r["steps"] or {}).get("uploading")),
                  secs(r.get("client_duration_s")), r.get("snapshot_size", ""), gb(r["size_delta_gb"], True),
                  r.get("list_check", "")] for r in cycle]
         sections.append(("Latest run (%s)" % last_stamp, "", [
-            "Scenario", "Status", "Data change", "Data change took", "Job id", "Snapshot id", "Queue wait",
-            "Snapshot time", "Trigger to success", "Size in list", "Size change", "List check"], rows, ""))
+            "Data size", "Scenario", "Status", "Data change", "Data change took", "Job id", "Snapshot id", "Queue wait",
+            "Snapshot time", "Committing", "Uploading", "Trigger to success", "Size in list", "Size change",
+            "List check"], rows, ""))
 
     # All runs
-    rows = [[r.get("run_stamp", ""), SCENARIO_LABEL.get(r["scenario"], r["scenario"]), r.get("status", ""),
-             r.get("snapshot_id", ""), r.get("created_snapshot_id") and "%d" % r["created_snapshot_id"] or "",
+    rows = [[r.get("run_stamp", ""), size_text(r), SCENARIO_LABEL.get(r["scenario"], r["scenario"]),
+             r.get("status", ""), r.get("snapshot_id", ""),
+             r.get("created_snapshot_id") and "%d" % r["created_snapshot_id"] or "",
              r.get("snapshot_version", ""), change_text(r), secs(r.get("data_seconds")), secs(r["queue_wait_s"]),
              secs(r.get("snapshot_duration_s")), secs(r.get("client_duration_s")),
              "%d" % r["polls"] if r.get("polls") else "", r.get("snapshot_size", ""), gb(r["size_delta_gb"], True),
              r.get("list_check", ""), utc_short(r.get("snapshot_started_at"))] for r in runs]
     sections.append(("All runs", "One row per scenario run, oldest first.", [
-        "Run", "Scenario", "Status", "Job id", "Snapshot id", "Version", "Data change", "Data change took",
+        "Run", "Data size", "Scenario", "Status", "Job id", "Snapshot id", "Version", "Data change", "Data change took",
         "Queue wait", "Snapshot time", "Trigger to success", "Polls", "Size in list", "Size change", "List check",
         "Started"], rows, ""))
 
@@ -242,12 +320,13 @@ def _tables(runs: list) -> list:
         src = final if final.get("step") else (last[-1] if last else {})
         ended = "%s (%s/%s)" % (src["step"], src.get("step_number"), src.get("step_count")) if src else ""
         errors = len([e for e in (r.get("poll_history") or []) if e.get("error")])
-        rows.append([r.get("run_stamp", ""), SCENARIO_LABEL.get(r["scenario"], r["scenario"]), r.get("status", "")]
+        rows.append([r.get("run_stamp", ""), size_text(r), SCENARIO_LABEL.get(r["scenario"], r["scenario"]),
+                     r.get("status", "")]
                     + [secs(r["steps"].get(s)) if s in r["steps"] else "" for s in step_names]
                     + [ended, errors or "", secs(r.get("snapshot_duration_s"))])
     if rows:
         sections.append(("Step breakdown", "How long the job spent in each step, from the status polls.",
-                         ["Run", "Scenario", "Status"] + [s.capitalize() for s in step_names]
+                         ["Run", "Data size", "Scenario", "Status"] + [s.capitalize() for s in step_names]
                          + ["Ended at step", "Failed polls", "Snapshot time"], rows,
                          "Each step lasts from the first poll that showed it to the first poll that showed the next "
                          "step, so each is accurate to one poll interval (%s s). The step the job ended in has no "
@@ -304,22 +383,38 @@ def _findings(runs: list) -> list:
     """Plain-language findings computed from the runs."""
     ok = [r for r in runs if r["ok"]]
     out = []
-    avg = {}
-    for sc in ("add", "modify", "remove"):
-        t = [r["snapshot_duration_s"] for r in ok if r["scenario"] == sc and r.get("snapshot_duration_s")]
-        if t:
-            avg[sc] = mean(t)
-            out.append("%s: snapshot took %s on average over %d run(s) (range %s to %s)."
-                       % (SCENARIO_LABEL[sc], secs(avg[sc]), len(t), secs(min(t)), secs(max(t))))
-    if "add" in avg and "remove" in avg:
-        out.append("Removing data snapshots in about %.0f%% of the time adding the same amount takes."
-                   % (100 * avg["remove"] / avg["add"]))
-    commits = [(r["steps"].get("committing"), r["snapshot_duration_s"]) for r in ok
-               if r["steps"].get("committing") and r.get("snapshot_duration_s")]
-    if commits:
-        share = mean(c / d for c, d in commits)
-        out.append("The committing step is the largest part of every snapshot: about %.0f%% of the snapshot time."
-                   % (100 * share))
+    sizes = sorted({r["target_gb"] for r in ok if r.get("target_gb") is not None}) or [None]
+    for size in sizes:
+        avg = {}
+        for sc in ("add", "modify", "remove"):
+            t = [r["snapshot_duration_s"] for r in ok if r["scenario"] == sc and r.get("snapshot_duration_s")
+                 and (size is None or r.get("target_gb") == size)]
+            if t:
+                avg[sc] = mean(t)
+                out.append("%s%s: snapshot took %s on average over %d run(s) (range %s to %s)."
+                           % ("%g GB, " % size if size is not None else "", SCENARIO_LABEL[sc], secs(avg[sc]),
+                              len(t), secs(min(t)), secs(max(t))))
+        if "add" in avg and "remove" in avg:
+            out.append("%sRemoving data snapshots in about %.0f%% of the time adding the same amount takes."
+                       % ("%g GB: " % size if size is not None else "", 100 * avg["remove"] / avg["add"]))
+    adds = [r for r in ok if r["scenario"] == "add" and r.get("target_gb") and r.get("snapshot_duration_s")]
+    add_sizes = sorted({r["target_gb"] for r in adds})
+    if len(add_sizes) > 1:
+        small, large = add_sizes[0], add_sizes[-1]
+        t_small = mean(r["snapshot_duration_s"] for r in adds if r["target_gb"] == small)
+        t_large = mean(r["snapshot_duration_s"] for r in adds if r["target_gb"] == large)
+        out.append("Scaling: adding %g GB took %s on average, %g GB took %s - %.1fx the time for %gx the data."
+                   % (small, secs(t_small), large, secs(t_large), t_large / t_small, large / small))
+    timed = [r for r in ok if r["steps"].get("committing") and r.get("snapshot_duration_s")]
+    if timed:
+        commit = mean(r["steps"]["committing"] / r["snapshot_duration_s"] for r in timed)
+        both = mean(sum(r["steps"].get(s) or 0 for s in CRITICAL_STEPS) / r["snapshot_duration_s"] for r in timed)
+        uploads = [r["steps"]["uploading"] for r in timed if r["steps"].get("uploading")]
+        out.append("Committing and uploading are the critical steps: together about %.0f%% of the snapshot time. "
+                   "Committing alone is about %.0f%% (%s to %s)%s." % (
+                       100 * both, 100 * commit, secs(min(r["steps"]["committing"] for r in timed)),
+                       secs(max(r["steps"]["committing"] for r in timed)),
+                       "; uploading %s to %s" % (secs(min(uploads)), secs(max(uploads))) if uploads else ""))
     queued = [r for r in ok if (r["queue_wait_s"] or 0) >= 5]
     if queued:
         out.append("%d run(s) waited in the queue before starting (up to %s); the snapshot time excludes it, "
@@ -327,7 +422,9 @@ def _findings(runs: list) -> list:
                                                                                       for r in queued))))
     failed = [r for r in runs if not r["ok"]]
     for r in failed:
-        out.append("Failure: job %s (%s, run %s) - %s." % (r.get("snapshot_id"), r["scenario"], r.get("run_stamp"),
+        out.append("Failure: job %s (%s%s, run %s) - %s." % (r.get("snapshot_id"), r["scenario"],
+                                                          " " + size_text(r) if size_text(r) else "",
+                                                          r.get("run_stamp"),
                                                         (r.get("error") or r.get("status", ""))[:400].rstrip(".")))
     return out
 

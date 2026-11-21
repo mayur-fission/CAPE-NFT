@@ -17,6 +17,13 @@ that poll is kept too). One test per change (scenario):
 The tests run in that order (add -> modify -> remove), each on the data the
 one before left, so running them all is one full cycle.
 
+Sizes: SNAPSHOT_DATA_GB takes one size or a comma-separated sequence, e.g.
+"1, 2, 5, 10, 25, 50": one full cycle per size, in the order given - add,
+modify, remove with 1 GB, then add, modify, remove with 2 GB, and so on.
+Test ids end in the size (test_snapshot_after_adding_data[2GB-chromium]),
+so -k "2GB" runs one size. The data and snapshot timeouts grow with the size
+(see _data_timeout_s / _snapshot_timeout_s).
+
 The project is created by hand beforehand; its RStudio session is opened,
 or launched when it is not listed yet. Nothing outside SNAPSHOT_DATA_DIR is
 deleted.
@@ -33,22 +40,36 @@ Flow: login -> open session SNAPSHOT_SESSION_NAME -> change the data
       evidence/runs/<run>/snapshot_time.json and evidence/snapshot_times.csv
       (all runs)
 
+Token: before the first test the run asks for the API's bearer token on the
+console (Enter keeps the TOKEN in .env) and checks it with the snapshot list
+API; if the API rejects the token mid-test, it asks for a new one and carries
+on with it instead of failing. A new token is saved to .env as TOKEN. No
+console (Jenkins, VS Code test explorer): the TOKEN in .env is used. See
+common/snapshot_token.py.
+
 .env / environment:
   required  SNAPSHOT_PROJECT_DIR (the project folder on the server, e.g.
             /mnt/fsx/CAPE_2026_11_0223: project id 223 comes from its name),
             API_BASE_URL (the snapshot API, e.g. https://<host>),
-            TOKEN (the API's bearer token, sent as "Bearer <TOKEN>")
+            TOKEN (the API's bearer token, sent as "Bearer <TOKEN>"; asked
+            for at the start when the run has a console)
+  token     SNAPSHOT_TOKEN_PROMPT (auto: ask when there is a console; 0:
+            never; 1: always), SNAPSHOT_TOKEN_SAVE (1: save a new token to
+            .env; 0: this run only)
   optional  PROJECT_ID (instead of the one in SNAPSHOT_PROJECT_DIR; must
             match it when both are set), SNAPSHOT_DATA_DIR (the empty data
             folder; <project dir>/snapshot_test_data),
             SNAPSHOT_SESSION_NAME (TEST_SNAPSHOT_NFR, from
             common/session_naming_logic.py), SNAPSHOT_CREATE_SESSION (1:
             launch that session when it is not listed; 0: fail instead),
-            SNAPSHOT_DATA_GB (1, decimal GB, at least 1), SNAPSHOT_DATA_SEED
+            SNAPSHOT_DATA_GB (1; decimal GB, at least 1; or a sequence such
+            as 1,2,5 - one cycle per size), SNAPSHOT_DATA_SEED
             (the script's default, 1), SNAPSHOT_DATA_CLEAN (0; 1 empties
             SNAPSHOT_DATA_DIR first), SNAPSHOT_POLL_INTERVAL_S (10),
-            SNAPSHOT_TIMEOUT_S (7200), SNAPSHOT_DATA_TIMEOUT_S (1800),
-            SNAPSHOT_TEST_TIMEOUT_S (both timeouts + 900), SNAPSHOT_USER (1),
+            SNAPSHOT_TIMEOUT_S (7200; at least 240 s per GB),
+            SNAPSHOT_DATA_TIMEOUT_S (1800; at least 120 s per GB),
+            SNAPSHOT_TEST_TIMEOUT_S (both timeouts of the largest size + 900),
+            SNAPSHOT_USER (1),
             SNAPSHOT_DATA_SCRIPT / SNAPSHOT_DATA_SERVER_SCRIPT /
             SNAPSHOT_SCRIPT_DIR (which generator, where it is uploaded),
             SNAPSHOT_NAME (NFR <run start>) / SNAPSHOT_COMMENT (TEST) /
@@ -66,12 +87,14 @@ all three in order (add, modify, remove), or one scenario with -k (adding,
 modifying, removing):
     pytest tests/test_project_snapshot_time.py -m snapshot
     pytest tests/test_project_snapshot_time.py -m snapshot -k modifying
+    pytest tests/test_project_snapshot_time.py -m snapshot -k "2GB"
 """
 import json
 import posixpath
 from datetime import datetime, timezone
 
 import pytest
+import requests
 
 from common.dummy_data import create_test_data, modify_test_data, remove_test_data
 from common.api_ui_combo import launch_or_reopen_session
@@ -93,6 +116,7 @@ from common.snapshot_api import (
     STATUS_FIELDS,
     SUCCESS_STATUSES,
     SnapshotApi,
+    SnapshotAuthError,
     SnapshotTimeout,
     created_snapshot_id,
     field,
@@ -102,6 +126,7 @@ from common.snapshot_api import (
     record_snapshot_result,
     step_durations,
 )
+from common.snapshot_token import ask_new_token, can_prompt, save_token, token_for_run, use_pytest_config
 from config.config import env, optional_int
 
 PROJECT_DIR = (env("SNAPSHOT_PROJECT_DIR") or "").rstrip("/")
@@ -109,14 +134,48 @@ PROJECT_ID_IN_DIR = project_id_from_path(PROJECT_DIR)
 PROJECT_ID = env("PROJECT_ID") or PROJECT_ID_IN_DIR
 SESSION_NAME = env("SNAPSHOT_SESSION_NAME") or SNAPSHOT_SESSION_NAME
 DATA_DIR = env("SNAPSHOT_DATA_DIR") or (posixpath.join(PROJECT_DIR, "snapshot_test_data") if PROJECT_DIR else None)
-DATA_GB = float(env("SNAPSHOT_DATA_GB") or "1")
+
+
+def _parse_sizes(text: str):
+    """(sizes in GB, problem): "1, 2, 5" -> ([1.0, 2.0, 5.0], None); a "GB"
+    suffix is allowed; repeats are dropped, the order is kept."""
+    sizes = []
+    for part in text.split(","):
+        part = part.strip().upper()
+        part = (part[:-2] if part.endswith("GB") else part).strip()
+        if not part:
+            continue
+        try:
+            size = float(part)
+        except ValueError:
+            return [1.0], "SNAPSHOT_DATA_GB %r: %r is not a number (use e.g. 1 or 1,2,5)" % (text, part)
+        if size not in sizes:
+            sizes.append(size)
+    return sizes or [1.0], None
+
+
+# One full add/modify/remove cycle per size, in this order
+DATA_SIZES, DATA_SIZES_PROBLEM = _parse_sizes(env("SNAPSHOT_DATA_GB") or "1")
 DATA_SEED = optional_int(env("SNAPSHOT_DATA_SEED"))
 DATA_CLEAN = (env("SNAPSHOT_DATA_CLEAN") or "0") in ("1", "true", "True", "yes")
 POLL_INTERVAL_S = float(env("SNAPSHOT_POLL_INTERVAL_S") or "10")
 SNAPSHOT_TIMEOUT_S = float(env("SNAPSHOT_TIMEOUT_S") or "7200")
 DATA_TIMEOUT_S = int(env("SNAPSHOT_DATA_TIMEOUT_S") or "1800")
-# Whole test: data creation + the snapshot poll + 15 min for login, upload and spare
-TEST_TIMEOUT_S = int(env("SNAPSHOT_TEST_TIMEOUT_S") or DATA_TIMEOUT_S + SNAPSHOT_TIMEOUT_S + 900)
+
+
+def _data_timeout_s(size_gb: float) -> int:
+    """Time allowed to change the data: SNAPSHOT_DATA_TIMEOUT_S, at least 120 s per GB."""
+    return int(max(DATA_TIMEOUT_S, 120 * size_gb))
+
+
+def _snapshot_timeout_s(size_gb: float) -> float:
+    """Time allowed for the snapshot: SNAPSHOT_TIMEOUT_S, at least 240 s per GB."""
+    return max(SNAPSHOT_TIMEOUT_S, 240 * size_gb)
+
+
+# Whole test, for the largest size: data change + the snapshot poll + 15 min for login, upload and spare
+TEST_TIMEOUT_S = int(env("SNAPSHOT_TEST_TIMEOUT_S")
+                     or _data_timeout_s(max(DATA_SIZES)) + _snapshot_timeout_s(max(DATA_SIZES)) + 900)
 USER = int(env("SNAPSHOT_USER") or "1")
 # Launch SESSION_NAME from the New Session dialog when it is not on the session list
 CREATE_SESSION = (env("SNAPSHOT_CREATE_SESSION") or "1") in ("1", "true", "True", "yes")
@@ -128,15 +187,17 @@ pytestmark = [pytest.mark.rstudio_local, pytest.mark.snapshot]
 
 _REQUIRED = {"SNAPSHOT_PROJECT_DIR (a .../CAPE_<year>_<month>_<id> folder) or PROJECT_ID": PROJECT_ID,
              "SNAPSHOT_PROJECT_DIR or SNAPSHOT_DATA_DIR": DATA_DIR,
-             "API_BASE_URL": env("API_BASE_URL"), "TOKEN": env("TOKEN")}
+             "API_BASE_URL": env("API_BASE_URL")}  # TOKEN: see the snapshot_token fixture
 
 
 def _check_settings():
     missing = [name for name, value in _REQUIRED.items() if not value]
     if missing:
         pytest.fail("set %s in .env (see the module docstring)" % "; ".join(missing))
-    if DATA_GB < 1:
-        pytest.fail("SNAPSHOT_DATA_GB is %s: make_client_shape.py needs at least 1 (GB)" % DATA_GB)
+    if DATA_SIZES_PROBLEM:
+        pytest.fail(DATA_SIZES_PROBLEM)
+    if min(DATA_SIZES) < 1:
+        pytest.fail("SNAPSHOT_DATA_GB has %g: make_client_shape.py needs at least 1 (GB) per size" % min(DATA_SIZES))
     if not 0 < MODIFY_PERCENT <= 100:
         pytest.fail("SNAPSHOT_MODIFY_PERCENT is %s: use a share of the data above 0 and up to 100" % MODIFY_PERCENT)
     if POLL_INTERVAL_S <= 0 or SNAPSHOT_TIMEOUT_S <= 0 or DATA_TIMEOUT_S <= 0:
@@ -144,6 +205,47 @@ def _check_settings():
     if PROJECT_ID_IN_DIR and str(PROJECT_ID) != PROJECT_ID_IN_DIR:
         pytest.fail("PROJECT_ID %s does not match the project folder %s (project %s)"
                     % (PROJECT_ID, PROJECT_DIR, PROJECT_ID_IN_DIR))
+
+
+def _token_problem(token: str):
+    """None when the snapshot API accepts `token`, else why not."""
+    try:
+        SnapshotApi(token=token).check_token(PROJECT_ID)
+    except SnapshotAuthError as exc:
+        return str(exc).splitlines()[0][:300]
+    except requests.RequestException as exc:
+        pytest.fail("the snapshot API %s is not reachable to check the token: %s" % (env("API_BASE_URL"), exc))
+    return None
+
+
+@pytest.fixture(scope="module", params=DATA_SIZES, ids=lambda gb: "%gGB" % gb)
+def data_gb(request) -> float:
+    """The data size of this cycle. Module scope makes pytest run every test
+    with the first size (add, modify, remove), then every test with the next."""
+    log_step("Data size %g GB (cycle %d of %d: %s GB)", request.param, DATA_SIZES.index(request.param) + 1,
+             len(DATA_SIZES), ", ".join("%g" % s for s in DATA_SIZES))
+    return request.param
+
+
+@pytest.fixture(scope="session")
+def snapshot_token(pytestconfig):
+    """The API token for the whole run, asked for once before the first
+    test (common/snapshot_token.py); it is in os.environ["TOKEN"] after."""
+    use_pytest_config(pytestconfig)
+    _check_settings()
+    try:
+        return token_for_run(_token_problem)
+    except SnapshotAuthError as exc:
+        pytest.fail("snapshot API token: %s" % exc)
+
+
+def _api() -> SnapshotApi:
+    """A snapshot API client with the run's current token, asking the user
+    for a new one when the API rejects it mid-test."""
+    api = SnapshotApi()
+    api.on_auth_error = ask_new_token
+    api.on_new_token = save_token
+    return api
 
 
 def _open_session(page):
@@ -160,40 +262,55 @@ def _open_session(page):
                     "SNAPSHOT_CREATE_SESSION=1 to let the test launch it" % (SESSION_NAME, USER))
 
 
-def _add_data(page) -> dict:
-    return create_test_data(page, DATA_DIR, DATA_GB, timeout_ms=DATA_TIMEOUT_S * 1000,
+def _add_data(page, size_gb: float) -> dict:
+    return create_test_data(page, DATA_DIR, size_gb, timeout_ms=_data_timeout_s(size_gb) * 1000,
                             seed=DATA_SEED, clean=DATA_CLEAN)
 
 
-def _remove_data(page) -> dict:
-    return remove_test_data(page, DATA_DIR, timeout_ms=DATA_TIMEOUT_S * 1000)
+def _remove_data(page, size_gb: float) -> dict:
+    return remove_test_data(page, DATA_DIR, timeout_ms=_data_timeout_s(size_gb) * 1000)
 
 
-def _modify_data(page) -> dict:
-    return modify_test_data(page, DATA_DIR, MODIFY_PERCENT, seed=MODIFY_SEED, timeout_ms=DATA_TIMEOUT_S * 1000)
+def _modify_data(page, size_gb: float) -> dict:
+    return modify_test_data(page, DATA_DIR, MODIFY_PERCENT, seed=MODIFY_SEED,
+                            timeout_ms=_data_timeout_s(size_gb) * 1000)
 
 
-def _snapshot_after(page, scenario: str, change_data, what: str):
-    """Change the project's data with `change_data(page)` (in the session),
-    then snapshot it, time it, check it in the snapshot list and report.
+def _check_data_size(data: dict, size_gb: float):
+    """Warn when the data folder held another size than this cycle's (e.g.
+    the modify or remove scenario run alone after another size's add)."""
+    held = data.get("bytes_total") if data["action"] == "modify" else data.get("total_bytes")
+    if held and abs(held / 1e9 - size_gb) > 0.05 * size_gb:
+        log_step("WARNING: the data folder held %.2f GB, not this cycle's %g GB - the result is recorded "
+                 "under %g GB", held / 1e9, size_gb, size_gb)
+
+
+def _snapshot_after(page, scenario: str, size_gb: float, change_data, what: str):
+    """Change the project's data with `change_data(page, size_gb)` (in the
+    session), then snapshot it, time it, check it in the snapshot list and report.
 
     Flow: login -> open session -> change data -> trigger -> poll -> time -> list check -> report
     """
     _check_settings()
-    name = "%s %s" % (SNAPSHOT_NAME, scenario)  # e.g. "NFR 20261121-014119 remove"
-    log_step("Scenario %s: project %s, data folder %s, API %s", scenario, PROJECT_ID, DATA_DIR,
-             env("API_BASE_URL"))
-    api = SnapshotApi()
+    name = "%s %gGB %s" % (SNAPSHOT_NAME, size_gb, scenario)  # e.g. "NFR 20261121-014119 2GB remove"
+    snapshot_timeout_s = _snapshot_timeout_s(size_gb)
+    log_step("Scenario %s with %g GB: project %s, data folder %s, API %s", scenario, size_gb, PROJECT_ID,
+             DATA_DIR, env("API_BASE_URL"))
+    api = _api()
 
     with allure_step("%s in session %s" % (what, SESSION_NAME)):
         _open_session(page)
-        data = change_data(page)
+        data = change_data(page, size_gb)
+        if data["action"] != "add":
+            _check_data_size(data, size_gb)
 
     with allure_step("Trigger the snapshot of project %s" % PROJECT_ID):
         left = api.token_seconds_left()
-        if left is not None and left < SNAPSHOT_TIMEOUT_S:
-            log_step("WARNING: TOKEN expires in %.0f min, before the %.0f min wait is over - "
-                     "a long snapshot will fail with HTTP 401", left / 60.0, SNAPSHOT_TIMEOUT_S / 60.0)
+        if left is not None and left < snapshot_timeout_s:
+            log_step("WARNING: the token expires in %.0f min, before the %.0f min wait is over - %s",
+                     left / 60.0, snapshot_timeout_s / 60.0,
+                     "you will be asked for a new one if it is rejected" if can_prompt()
+                     else "a long snapshot will fail with HTTP 401")
         triggered_at_utc = datetime.now(timezone.utc).isoformat()
         snapshot_id = api.trigger_snapshot(PROJECT_ID, name=name)
 
@@ -202,6 +319,7 @@ def _snapshot_after(page, scenario: str, change_data, what: str):
         timing, listed, last = timing or {}, listed or {}, api.last_status or {}
         return {
             "scenario": scenario,
+            "target_gb": size_gb,  # this cycle's data size (SNAPSHOT_DATA_GB)
             "project_id": PROJECT_ID,
             "snapshot_id": snapshot_id,  # API 1's job_id
             "created_snapshot_id": listed.get("snapshot_id", listed_id),
@@ -238,8 +356,8 @@ def _snapshot_after(page, scenario: str, change_data, what: str):
 
     try:
         with allure_step("Wait for snapshot %s (every %ss, at most %ss)" % (snapshot_id, POLL_INTERVAL_S,
-                                                                          SNAPSHOT_TIMEOUT_S)):
-            client_duration_s = api.wait_until_complete(snapshot_id, POLL_INTERVAL_S, SNAPSHOT_TIMEOUT_S)
+                                                                          snapshot_timeout_s)):
+            client_duration_s = api.wait_until_complete(snapshot_id, POLL_INTERVAL_S, snapshot_timeout_s)
 
         with allure_step("Read the snapshot time from the status response"):
             timing = api.snapshot_timing(snapshot_id)
@@ -288,18 +406,20 @@ def _snapshot_after(page, scenario: str, change_data, what: str):
 
 
 @pytest.mark.timeout(TEST_TIMEOUT_S)
-def test_snapshot_after_adding_data(page):
-    """Scenario 1: add SNAPSHOT_DATA_GB GB of test data, then snapshot."""
-    _snapshot_after(page, "add", _add_data, "Create %s GB of test data" % DATA_GB)
+def test_snapshot_after_adding_data(snapshot_token, data_gb, page):
+    """Scenario 1: add data_gb GB of test data, then snapshot."""
+    _snapshot_after(page, "add", data_gb, _add_data, "Create %g GB of test data" % data_gb)
 
 
 @pytest.mark.timeout(TEST_TIMEOUT_S)
-def test_snapshot_after_modifying_data(page):
-    """Scenario 2: change SNAPSHOT_MODIFY_PERCENT % of the test data in place, then snapshot."""
-    _snapshot_after(page, "modify", _modify_data, "Change %g%% of the test data in %s" % (MODIFY_PERCENT, DATA_DIR))
+def test_snapshot_after_modifying_data(snapshot_token, data_gb, page):
+    """Scenario 2: change SNAPSHOT_MODIFY_PERCENT % of the test data (data_gb GB) in place, then snapshot."""
+    _snapshot_after(page, "modify", data_gb, _modify_data,
+                    "Change %g%% of the %g GB of test data in %s" % (MODIFY_PERCENT, data_gb, DATA_DIR))
 
 
 @pytest.mark.timeout(TEST_TIMEOUT_S)
-def test_snapshot_after_removing_data(page):
-    """Scenario 3: delete the test data (as added, or added and modified), then snapshot."""
-    _snapshot_after(page, "remove", _remove_data, "Remove the test data in %s" % DATA_DIR)
+def test_snapshot_after_removing_data(snapshot_token, data_gb, page):
+    """Scenario 3: delete the test data (data_gb GB, as added or added and modified), then snapshot."""
+    _snapshot_after(page, "remove", data_gb, _remove_data,
+                    "Remove the %g GB of test data in %s" % (data_gb, DATA_DIR))
