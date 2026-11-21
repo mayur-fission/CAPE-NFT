@@ -38,6 +38,7 @@ START_TRIES = 3
 _OFF = ("0", "false", "no", "off")
 _ON = ("1", "true", "yes", "on")
 _pytest_config = None
+_run_token_ok = False  # token_for_run() already accepted a token in this run
 
 
 def use_pytest_config(config):
@@ -94,7 +95,12 @@ def token_for_run(check: Callable[[str], Optional[str]]) -> str:
     keeps the TOKEN in .env) and checks it with `check(token)`, which returns
     None when the API accepts it, else why not; a rejected token is asked for
     again, up to START_TRIES times. Without a console the TOKEN in .env is
-    checked and used. Raises SnapshotAuthError when no usable token is given."""
+    checked and used. Raises SnapshotAuthError when no usable token is given.
+    Asks once per run: later calls (another test module) return the token
+    in use (TOKEN, replaced when a new one was given mid-test)."""
+    global _run_token_ok
+    if _run_token_ok and env("TOKEN"):
+        return clean_token(env("TOKEN"))
     current = clean_token(env("TOKEN"))
     if not can_prompt():
         if not current:
@@ -103,6 +109,7 @@ def token_for_run(check: Callable[[str], Optional[str]]) -> str:
         problem = check(current)
         if problem:
             raise SnapshotAuthError("the TOKEN in .env was rejected: %s" % problem)
+        _run_token_ok = True
         return current
 
     host = urlparse(env("API_BASE_URL") or "").netloc or "the snapshot API"
@@ -120,6 +127,7 @@ def token_for_run(check: Callable[[str], Optional[str]]) -> str:
             else:
                 os.environ["TOKEN"] = token
             log_step("Snapshot API token accepted (%s)", "the one entered" if entered else "TOKEN from .env")
+            _run_token_ok = True
             return token
         log_step("Snapshot API token rejected: %s", problem)
         message = "That token was rejected: %s\nPaste a valid bearer token for %s." % (problem, host)

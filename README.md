@@ -179,9 +179,10 @@ After each scenario, the test writes these files:
   - the time from the create call to success;
   - the API responses.
 - A row in `evidence/snapshot_times.csv`, one per scenario run, so runs can be compared. A snapshot that fails, times out or doesn't appear correctly in the snapshot list also gets a row, with its outcome and the server's error.
-- The report, rebuilt from all runs:
+- The report, rebuilt from all runs of both snapshot tests:
   - `evidence/snapshot_report.html`, attached to Allure;
-  - `evidence/snapshot_report.md`.
+  - `evidence/snapshot_report.md`;
+  - `evidence/snapshot_report.png`, attached to Allure: the timing tables as one image (by data size, by size and scenario, committing and uploading, the latest run and the newest 40 runs). It needs matplotlib, which `requirements.txt` installs; without it the PNG is skipped.
 
 The report covers:
 - an overview and key findings;
@@ -194,7 +195,21 @@ The report covers:
 - failures;
 - the method.
 
-To rebuild it without a run:
+#### Initial 50 GB snapshot
+
+`tests/test_initial_50gb.py` times the snapshot after a large initial load: it creates 50 GB of data in the project and takes one snapshot. There is no modify or remove step, so the data stays.
+
+```powershell
+pytest tests/test_initial_50gb.py -m snapshot -s
+```
+
+- The size is fixed in the test (`SIZE_GB = 50`); `SNAPSHOT_DATA_GB` does not apply.
+- The data goes to its own folder, `<SNAPSHOT_PROJECT_DIR>/initial_50gb_data`, so the add/modify/remove cycle never deletes it. The folder must be empty or absent; `SNAPSHOT_DATA_CLEAN=1` empties it first. The server needs 50 GB free.
+- Each run uses a new seed from its start time, so data recreated after emptying the folder is new to the snapshot. A `SNAPSHOT_DATA_SEED` set in `.env` is used instead.
+- Timeouts: at least 6000 s for the data and 12000 s for the snapshot.
+- Everything else is shared with the cycle test (`common/snapshot_flow.py`): project, session, token prompt, polling, list check and reporting. Its results go to the same CSV with `test` = `test_initial_50gb`, to `snapshot_time_add_50gb.json` in its own evidence folder, and to the report as "Initial load".
+
+To rebuild the report without a run:
 
 ```
 python -m common.snapshot_report

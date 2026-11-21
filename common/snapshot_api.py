@@ -116,7 +116,7 @@ REQUEST_TIMEOUT_S = 60
 RESULTS_CSV = os.path.join(EVIDENCE_ROOT, "snapshot_times.csv")
 # The job's longest steps, given their own columns (seconds, from the poll history - see step_durations())
 CRITICAL_STEPS = ("committing", "uploading")
-RESULT_FIELDS = ("run_stamp", "scenario", "target_gb", "status", "project_id", "snapshot_id",
+RESULT_FIELDS = ("run_stamp", "test", "scenario", "target_gb", "status", "project_id", "snapshot_id",
                  "created_snapshot_id", "snapshot_version", "data_action", "data_gb", "data_percent",
                  "data_files", "data_seconds",
                  "snapshot_size", "queue_wait_s", "snapshot_duration_s", "committing_s", "uploading_s",
@@ -658,9 +658,12 @@ def record_snapshot_result(result: dict) -> str:
     log_step("Snapshot result written to %s and %s", json_path, RESULTS_CSV)
     try:  # the tabular report of all runs; a report problem must not fail the run
         from common.snapshot_report import write_report
-        html_path, md_path = write_report()
+        html_path, md_path, png_path = write_report()
         attach_allure_file(html_path)
-        log_step("Snapshot report updated: %s (and %s)", html_path, md_path)
+        if png_path:
+            attach_allure_file(png_path)
+        log_step("Snapshot report updated: %s (and %s%s)", html_path, md_path,
+                 ", %s" % png_path if png_path else "; no PNG: matplotlib is not installed")
     except Exception as exc:  # noqa: BLE001
         log_step("WARNING: could not write the snapshot report: %s", exc)
     return json_path
@@ -689,6 +692,8 @@ def _upgrade_results_csv():
         if old_header:
             row.setdefault("scenario", "add")
             row.setdefault("data_action", "add")
+        if not row.get("test"):
+            row["test"] = "test_project_snapshot_time"  # the only snapshot test before the column
         if not row.get("list_check") and row.get("status") in SUCCESS_STATUSES:
             row["list_check"] = "passed"  # rows were only written after the list check passed
         saved = _saved_result(row)

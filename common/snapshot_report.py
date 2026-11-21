@@ -1,12 +1,13 @@
-"""Tabular report of the project snapshot timing runs (tests/test_project_snapshot_time.py).
+"""Tabular report of the project snapshot timing runs (tests/test_project_snapshot_time.py
+and tests/test_initial_50gb.py).
 
 Reads every run in evidence/snapshot_times.csv (one row per scenario run), adds the
-details each run saved in evidence/runs/<run>_test_project_snapshot_time/
-snapshot_time_<scenario>.json (poll history, queue wait, step times, list entry), and
-writes:
+details each run saved in evidence/runs/<run>_<test file>/snapshot_time_*.json (poll
+history, queue wait, step times, list entry), and writes:
 
     evidence/snapshot_report.html   styled tables, for sharing / Allure
     evidence/snapshot_report.md     the same tables in Markdown
+    evidence/snapshot_report.png    the timing tables as one image (needs matplotlib)
 
 Sections: overview, key findings, snapshot time by data size (SNAPSHOT_DATA_GB with
 several sizes), summary by size and scenario, committing and uploading, latest run, all
@@ -33,9 +34,18 @@ RESULTS_CSV = os.path.join(EVIDENCE_ROOT, "snapshot_times.csv")
 RUNS_DIR = os.path.join(EVIDENCE_ROOT, "runs")
 REPORT_HTML = os.path.join(EVIDENCE_ROOT, "snapshot_report.html")
 REPORT_MD = os.path.join(EVIDENCE_ROOT, "snapshot_report.md")
+REPORT_PNG = os.path.join(EVIDENCE_ROOT, "snapshot_report.png")
 
-SCENARIO_ORDER = {"add": 0, "modify": 1, "remove": 2}
-SCENARIO_LABEL = {"add": "Add data", "modify": "Modify data", "remove": "Remove data"}
+# Results from before the "test" column were all the cycle test's
+DEFAULT_TEST = "test_project_snapshot_time"
+INITIAL_TEST = "test_initial_50gb"
+# A run's kind: its scenario, or "initial" for the initial 50 GB test's add
+SCENARIO_ORDER = {"initial": -1, "add": 0, "modify": 1, "remove": 2}
+SCENARIO_LABEL = {"initial": "Initial load", "add": "Add data", "modify": "Modify data", "remove": "Remove data"}
+# The PNG shows these sections ("Latest run (...)" by its prefix); All runs at most PNG_MAX_RUNS rows, newest
+PNG_SECTIONS = ("Snapshot time by data size", "Summary by size and scenario", "Committing and uploading",
+                "Latest run", "All runs")
+PNG_MAX_RUNS = 40
 # The snapshot job's steps, in order (API 2's "step", step_number/step_count 6): 1 waiting, 2 cloning,
 # 3 committing, 4 uploading, 5 saving, 6 checksum - the last poll's step once the state is "succeeded".
 # Saving is short and usually falls between two 10 s polls, so it seldom gets its own time.
@@ -70,17 +80,19 @@ def _size_key(value) -> Optional[str]:
 
 
 def _run_jsons() -> dict:
-    """{(run_stamp, scenario, size): saved result} from every snapshot_time*.json
-    (size None for results saved before the size sequence)."""
+    """{(run_stamp, test, scenario, size): saved result} from every
+    evidence/runs/<run stamp>_<test file>/snapshot_time*.json (size None for
+    results saved before the size sequence)."""
     found = {}
-    for path in glob.glob(os.path.join(RUNS_DIR, "*_test_project_snapshot_time", "snapshot_time*.json")):
-        stamp = os.path.basename(os.path.dirname(path)).split("_test_project_snapshot_time")[0]
+    for path in glob.glob(os.path.join(RUNS_DIR, "*_test_*", "snapshot_time*.json")):
+        stamp, _, test = os.path.basename(os.path.dirname(path)).partition("_")
         try:
             with open(path, encoding="utf-8") as fh:
                 data = json.load(fh)
         except (OSError, ValueError):
             continue
-        found[(stamp, data.get("scenario") or "add", _size_key(data.get("target_gb")))] = data
+        found[(stamp, data.get("test") or test, data.get("scenario") or "add",
+               _size_key(data.get("target_gb")))] = data
     return found
 
 
@@ -95,11 +107,13 @@ def load_runs() -> list:
     runs = []
     for row in rows:
         scenario = row.get("scenario") or "add"
-        key = (row.get("run_stamp"), scenario)
+        test = row.get("test") or DEFAULT_TEST
+        key = (row.get("run_stamp"), test, scenario)
         detail = saved.get(key + (_size_key(row.get("target_gb")),)) or saved.get(key + (None,), {})
         run = dict(detail)
         run.update({k: v for k, v in row.items() if v not in (None, "")})
-        run["scenario"] = scenario
+        run["scenario"], run["test"] = scenario, test
+        run["kind"] = "initial" if test == INITIAL_TEST and scenario == "add" else scenario
         for key in ("target_gb", "data_gb", "data_percent", "data_files", "data_seconds", "queue_wait_s",
                     "snapshot_duration_s",
                     "client_duration_s", "polls", "poll_interval_s", "data_bytes", "created_snapshot_id"):
@@ -112,7 +126,7 @@ def load_runs() -> list:
         runs.append(run)
     # in the order they ran: by run, then by trigger time (size by size), add/modify/remove
     runs.sort(key=lambda r: (r.get("run_stamp", ""), r.get("triggered_at_utc") or "",
-                             SCENARIO_ORDER.get(r["scenario"], 9)))
+                             SCENARIO_ORDER.get(r["kind"], 9)))
     _add_size_deltas(runs)
     return runs
 
@@ -187,8 +201,8 @@ def size_text(run) -> str:
 
 
 def _groups(runs: list) -> list:
-    """[(size, scenario)] present in `runs`: sizes ascending, add/modify/remove."""
-    return sorted({(r.get("target_gb"), r["scenario"]) for r in runs},
+    """[(size, kind)] present in `runs`: sizes ascending, initial/add/modify/remove."""
+    return sorted({(r.get("target_gb"), r["kind"]) for r in runs},
                   key=lambda g: (g[0] if g[0] is not None else -1, SCENARIO_ORDER.get(g[1], 9)))
 
 
@@ -235,7 +249,7 @@ def _tables(runs: list) -> list:
     # Summary by size and scenario
     rows = []
     for size, sc in _groups(runs):
-        all_sc = [r for r in runs if r["scenario"] == sc and r.get("target_gb") == size]
+        all_sc = [r for r in runs if r["kind"] == sc and r.get("target_gb") == size]
         good = [r for r in all_sc if r["ok"]]
         times = [r["snapshot_duration_s"] for r in good]
         rate = [r["data_gb"] / (r["snapshot_duration_s"] / 60.0) for r in good
@@ -258,7 +272,7 @@ def _tables(runs: list) -> list:
     # Critical steps: committing and uploading take most of every snapshot
     rows = []
     for size, sc in _groups(runs):
-        good = [r for r in runs if r["scenario"] == sc and r.get("target_gb") == size and r["ok"]
+        good = [r for r in runs if r["kind"] == sc and r.get("target_gb") == size and r["ok"]
                 and r.get("snapshot_duration_s")]
         row = [size_text({"target_gb": size}), SCENARIO_LABEL.get(sc, sc), len(good)]
         for step in CRITICAL_STEPS:
@@ -282,7 +296,7 @@ def _tables(runs: list) -> list:
     if runs:
         last_stamp = runs[-1].get("run_stamp")
         cycle = [r for r in runs if r.get("run_stamp") == last_stamp]
-        rows = [[size_text(r), SCENARIO_LABEL.get(r["scenario"], r["scenario"]), r.get("status", ""), change_text(r),
+        rows = [[size_text(r), SCENARIO_LABEL.get(r["kind"], r["kind"]), r.get("status", ""), change_text(r),
                  secs(r.get("data_seconds")), r.get("snapshot_id", ""), r.get("created_snapshot_id") and
                  "%d" % r["created_snapshot_id"] or "", secs(r["queue_wait_s"]), secs(r.get("snapshot_duration_s")),
                  secs((r["steps"] or {}).get("committing")), secs((r["steps"] or {}).get("uploading")),
@@ -294,7 +308,7 @@ def _tables(runs: list) -> list:
             "List check"], rows, ""))
 
     # All runs
-    rows = [[r.get("run_stamp", ""), size_text(r), SCENARIO_LABEL.get(r["scenario"], r["scenario"]),
+    rows = [[r.get("run_stamp", ""), size_text(r), SCENARIO_LABEL.get(r["kind"], r["kind"]),
              r.get("status", ""), r.get("snapshot_id", ""),
              r.get("created_snapshot_id") and "%d" % r["created_snapshot_id"] or "",
              r.get("snapshot_version", ""), change_text(r), secs(r.get("data_seconds")), secs(r["queue_wait_s"]),
@@ -320,7 +334,7 @@ def _tables(runs: list) -> list:
         src = final if final.get("step") else (last[-1] if last else {})
         ended = "%s (%s/%s)" % (src["step"], src.get("step_number"), src.get("step_count")) if src else ""
         errors = len([e for e in (r.get("poll_history") or []) if e.get("error")])
-        rows.append([r.get("run_stamp", ""), size_text(r), SCENARIO_LABEL.get(r["scenario"], r["scenario"]),
+        rows.append([r.get("run_stamp", ""), size_text(r), SCENARIO_LABEL.get(r["kind"], r["kind"]),
                      r.get("status", "")]
                     + [secs(r["steps"].get(s)) if s in r["steps"] else "" for s in step_names]
                     + [ended, errors or "", secs(r.get("snapshot_duration_s"))])
@@ -340,7 +354,7 @@ def _tables(runs: list) -> list:
         if r.get("data_seconds") is None:
             continue
         rate = (r["data_bytes"] or (r["data_gb"] or 0) * 1e9) / 1e6 / r["data_seconds"] if r["data_seconds"] else None
-        rows.append([r.get("run_stamp", ""), SCENARIO_LABEL.get(r["scenario"], r["scenario"]),
+        rows.append([r.get("run_stamp", ""), SCENARIO_LABEL.get(r["kind"], r["kind"]),
                      r.get("data_action") or r["scenario"], "%d" % r["data_files"] if r.get("data_files") else "",
                      "{:,.0f}".format(r["data_bytes"]) if r.get("data_bytes") else gb(r.get("data_gb")),
                      "%g%%" % r["data_percent"] if r.get("data_percent") else "", r.get("data_seed", ""),
@@ -353,7 +367,7 @@ def _tables(runs: list) -> list:
                      "deleted."))
 
     # Failures
-    rows = [[r.get("run_stamp", ""), SCENARIO_LABEL.get(r["scenario"], r["scenario"]), r.get("snapshot_id", ""),
+    rows = [[r.get("run_stamp", ""), SCENARIO_LABEL.get(r["kind"], r["kind"]), r.get("snapshot_id", ""),
              r.get("status", ""), utc_short(r.get("snapshot_started_at")), utc_short(r.get("snapshot_ended_at")),
              r.get("error", "")] for r in failed]
     sections.append(("Failures and incidents", "" if rows else "None.",
@@ -371,6 +385,8 @@ def _overview(runs: list) -> list:
                                            else "")),
         ("Snapshot API", host),
         ("Runs", "%d scenario runs: %d passed, %d failed" % (len(runs), len(ok), len(runs) - len(ok))),
+        ("Tests", ", ".join("%s (%d)" % (t, len([r for r in runs if r["test"] == t]))
+                            for t in sorted({r["test"] for r in runs}))),
         ("Period", "%s to %s" % (first, last)),
         ("Data folder", env("SNAPSHOT_DATA_DIR") or (env("SNAPSHOT_PROJECT_DIR") or "").rstrip("/")
          + "/snapshot_test_data"),
@@ -541,12 +557,93 @@ def write_markdown(runs: list, path: str = REPORT_MD) -> str:
     return path
 
 
+def _png_sections(runs: list) -> list:
+    """The timing sections of the report for the PNG, All runs cut to the newest PNG_MAX_RUNS."""
+    out = []
+    for title, _intro, header, rows, _note in _tables(runs):
+        if not any(title == name or title.startswith(name + " (") for name in PNG_SECTIONS):
+            continue
+        if title == "All runs" and len(rows) > PNG_MAX_RUNS:
+            title = "All runs (newest %d of %d)" % (PNG_MAX_RUNS, len(rows))
+            rows = rows[-PNG_MAX_RUNS:]
+        out.append((title, header, rows))
+    return out
+
+
+def write_png(runs: list, path: str = REPORT_PNG) -> Optional[str]:
+    """The timing tables (by size, by size and scenario, committing and
+    uploading, latest run, all runs) as one PNG; None when matplotlib is not
+    installed or there are no runs."""
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return None
+    sections = [sec for sec in _png_sections(runs) if sec[2]]
+    if not sections:
+        return None
+    # inches per character / table row / section title / space under a table
+    char_in, row_in, title_in, gap_in = 0.074, 0.24, 0.45, 0.3
+
+    def widths(header, rows):
+        return [max([len(str(h))] + [len(str(r[i])) for r in rows]) + 3 for i, h in enumerate(header)]
+
+    table_w = [sum(widths(h, r)) * char_in for _, h, r in sections]
+    fig_w = max(12.0, max(table_w) + 0.6)
+    heights = [title_in + (len(r) + 1) * row_in + gap_in for _, _, r in sections]
+    fig = plt.figure(figsize=(fig_w, sum(heights) + 1.0), dpi=110)
+    fig.patch.set_facecolor("white")
+    ok = [r for r in runs if r["ok"]]
+    fig.text(0.3 / fig_w, 1 - 0.35 / (sum(heights) + 1.0), "Project snapshot timings", fontsize=15,
+             fontweight="bold", color="#1d2330", va="top")
+    fig.text(0.3 / fig_w, 1 - 0.68 / (sum(heights) + 1.0),
+             "Project %s  |  %d runs: %d passed, %d failed  |  generated %s" % (
+                 ", ".join(sorted({str(r.get("project_id")) for r in runs if r.get("project_id")})), len(runs),
+                 len(ok), len(runs) - len(ok), datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")),
+             fontsize=9, color="#5d6676", va="top")
+    total_h, used = sum(heights) + 1.0, 1.0  # inches; the first inch holds the title
+    status_colors = {"ok": "#1a7f37", "bad": "#c62828"}
+    for (title, header, rows), h, w in zip(sections, heights, table_w, strict=True):
+        ax = fig.add_axes([0.3 / fig_w, (total_h - used - h) / total_h, (fig_w - 0.6) / fig_w, h / total_h])
+        used += h
+        ax.axis("off")
+        ax.text(0, 1 - 0.12 / h, title, fontsize=11, fontweight="bold", color="#1d2330", va="top",
+                transform=ax.transAxes)
+        col_w = widths(header, rows)
+        frac = w / (fig_w - 0.6)
+        table = ax.table(cellText=[[str(c) for c in r] for r in rows], colLabels=header,
+                         colWidths=[c / sum(col_w) * frac for c in col_w], cellLoc="left", colLoc="left",
+                         bbox=[0, gap_in / h, frac, 1 - (title_in + gap_in) / h])
+        table.auto_set_font_size(False)
+        table.set_fontsize(8)
+        for (row, _col), cell in table.get_celld().items():
+            cell.set_edgecolor("#dde1e8")
+            cell.set_linewidth(0.6)
+            if row == 0:
+                cell.set_facecolor("#f3f5f8")
+                cell.get_text().set_fontweight("bold")
+            else:
+                cell.set_facecolor("white" if row % 2 else "#fafbfc")
+                word = _STATUS_WORDS.get(str(cell.get_text().get_text()).lower())
+                if word:
+                    cell.get_text().set_color(status_colors[word])
+                    cell.get_text().set_fontweight("bold")
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    fig.savefig(path, facecolor="white")
+    plt.close(fig)
+    return path
+
+
 def write_report() -> tuple:
-    """Write the HTML and Markdown reports from all runs; (html path, md path)."""
+    """Write the HTML, Markdown and PNG reports from all runs; (html path,
+    md path, png path or None when no PNG could be made)."""
     runs = load_runs()
-    return write_html(runs), write_markdown(runs)
+    return write_html(runs), write_markdown(runs), write_png(runs)
 
 
 if __name__ == "__main__":
     for p in write_report():
-        print(p)
+        if p:
+            print(p)
