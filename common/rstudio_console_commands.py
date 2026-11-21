@@ -198,6 +198,16 @@ def read_text_file(page, path, timeout_ms=30000):
     return None if body.strip() == _MISSING_FILE else body
 
 
+def read_text_lines(page, path, first, last, timeout_ms=60000):
+    """Lines `first`..`last` (1-based, inclusive) of the text file `path`,
+    printed one per console line. RStudio truncates console lines longer
+    than its output line length limit (1000 characters by default), so
+    long content must not be joined into one line to be read back."""
+    r_statements = "cat(readLines(%s, warn=FALSE)[%d:%d], sep='\\n')" % (r_string(path), first, last)
+    body = _read_console_block(page, r_statements, timeout_ms, "lines %d-%d of %r" % (first, last, path))
+    return [line.rstrip("\r") for line in body.split("\n")]
+
+
 _MISSING_FILE = "@@AUTO_PERF_MISSING@@"
 _FILE_LIST_SEPARATOR = "@@AUTO_PERF_SEP@@"
 
@@ -211,6 +221,27 @@ def get_file_list(page, path, recursive=False, timeout_ms=15000):
     )
     body = _read_console_block(page, r_statements, timeout_ms, "file list for %r" % path).strip()
     return body.split(_FILE_LIST_SEPARATOR) if body else []
+
+
+# R errors that come from the client's original scripts, not from us: a
+# command stopping with one of these counts as finished, not failed.
+# Regexes valid in both Python and R; '.' stands for the quote, which R
+# prints as a straight or a curly one depending on the locale.
+IGNORED_R_ERROR_PATTERNS = (
+    r"object .p_live. not found",
+)
+
+
+def is_ignored_r_error(message):
+    """Whether the R error `message` is one of IGNORED_R_ERROR_PATTERNS."""
+    return any(re.search(pattern, message) for pattern in IGNORED_R_ERROR_PATTERNS)
+
+
+def r_ignored_error_condition(message_var):
+    """R expression that is TRUE when the R string `message_var` is an
+    ignored error (IGNORED_R_ERROR_PATTERNS)."""
+    return "any(vapply(c(%s), grepl, logical(1), x = %s))" % (
+        ", ".join(r_string(p) for p in IGNORED_R_ERROR_PATTERNS), message_var)
 
 
 class RCommandError(RuntimeError):
@@ -232,10 +263,13 @@ def submit_console_command(page, command, confirm=True):
     is printed as at top level. Returns (marker, started).
     """
     marker = _unique_marker("DONE")
+    # The error message is cut to 500 characters on one line: RStudio truncates
+    # console lines over 1000 characters, which would cut off the end marker
+    # and leave the failure unseen until the timeout.
     full_command = (
         "invisible(tryCatch({(function(r) if (r$visible) print(r$value))(withVisible({%s})); "
         "cat(%s, '\\n', sep='')}, error=function(e) "
-        "cat(%s, ': Error: ', conditionMessage(e), '%s', '\\n', sep='')))"
+        "cat(%s, ': Error: ', substr(gsub('[\\r\\n]+', ' ', conditionMessage(e)), 1, 500), '%s', '\\n', sep='')))"
         % (command, _r_split_literal(marker), _r_split_literal(_fail_marker(marker)), _VALUE_END)
     )
     _type_command(page, full_command, marker=marker if confirm else None)
@@ -265,7 +299,11 @@ def is_console_command_done(page, marker):
         return False
     failed = re.search(re.escape(_fail_marker(marker)) + r": Error: (.*?)" + re.escape(_VALUE_END), found, re.S)
     if failed:
-        raise RCommandError(" ".join(failed.group(1).split()))
+        message = " ".join(failed.group(1).split())
+        if is_ignored_r_error(message):
+            print("\n[rstudio-local] ignoring R error from the client script: %s" % message)
+            return True
+        raise RCommandError(message)
     return False
 
 

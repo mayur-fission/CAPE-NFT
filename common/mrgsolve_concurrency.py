@@ -33,7 +33,9 @@ from datetime import datetime
 
 from common.mrgsolve_summary import read_mrgsolve_summary
 from common.perf_report import attach_allure_file, write_csv_report, write_json_report
-from common.rstudio_console_commands import r_string, read_console_value, read_text_file
+from common.rstudio_console_commands import (
+    r_ignored_error_condition, r_string, read_console_value, read_text_file, read_text_lines,
+)
 from common.step_log import log_step
 from config.config import evidence_dir
 
@@ -151,6 +153,9 @@ def wrapper_source(script_path, session_name, suffix, session_dir, shared_dir, s
     if start_at:
         lines.append("  while (as.numeric(Sys.time()) < %.3f) Sys.sleep(%s)" % (start_at, SERVER_WAIT_STEP_S))
     lines += [
+        # The client script may setwd(); each run starts in, and returns to, the
+        # session folder, where timing.csv, the run summary and the outputs are read.
+        "  .wd <- getwd()",
         "  .scheduled <- %s" % ("sprintf('%%.3f', %.3f)" % start_at if start_at else "''"),
         "  .status <- 'ok'",
         "  for (.it in seq_len(%d)) {" % iterations,
@@ -163,8 +168,16 @@ def wrapper_source(script_path, session_name, suffix, session_dir, shared_dir, s
         "    message(sprintf('[mrgsolve] %%s run %%d started at %%s in session %%s', %s, .it,"
         " format(Sys.time(), '%%Y-%%m-%%d %%H:%%M:%%OS3'), %s))" % (r_string(script_name), r_string(session_name)),
         "    .status <- tryCatch({ source(%s, local = globalenv()); 'ok' }," % r_string(script_path),
-        "                        error = function(e) paste('R error:', gsub('[\\r\\n]+', ' ', conditionMessage(e))))",
+        "                        error = function(e) {",
+        "                          .m <- gsub('[\\r\\n]+', ' ', conditionMessage(e))",
+        # Errors from the client's original script (IGNORED_R_ERROR_PATTERNS) do not fail the run.
+        "                          if (%s) { message('[mrgsolve] ignoring R error from the client script: ', .m); 'ok' }"
+        % r_ignored_error_condition(".m"),
+        # Capped so a timing row stays under RStudio's console line length limit when read back.
+        "                          else paste('R error:', substr(.m, 1, 300))",
+        "                        })",
         "    .e <- as.numeric(Sys.time())",
+        "    try(setwd(.wd), silent = TRUE)",
         "    message(sprintf('[mrgsolve] %%s run %%d ended at %%s in session %%s after %%.2fs (%%s)', %s, .it,"
         " format(Sys.time(), '%%Y-%%m-%%d %%H:%%M:%%OS3'), %s, .e - .s, .status))"
         % (r_string(script_name), r_string(session_name)),
@@ -320,10 +333,9 @@ def read_group_timings(page, shared_dir):
     chunk = 50
     total_lines = count + 1  # header
     for first in range(1, total_lines + 1, chunk):
-        part = read_console_value(
-            page, "paste(readLines(%s, warn=FALSE)[%d:%d], collapse='@@ROW@@')"
-                  % (r_string(combined), first, min(first + chunk - 1, total_lines)), timeout_ms=60000)
-        lines += part.split("@@ROW@@")
+        # One row per console line: joined into one line, the rows passed
+        # RStudio's console line length limit and the read timed out.
+        lines += read_text_lines(page, combined, first, min(first + chunk - 1, total_lines))
     return parse_timing_csv("\n".join(lines))
 
 

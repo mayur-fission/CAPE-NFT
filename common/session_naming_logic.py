@@ -76,6 +76,11 @@ RUN_R_CLOSE_SESSION_PREFIX = "RUN_R_CLOSE_SESSION_"
 BATCH_RUN_R_CLOSE_SESSION_PREFIX = "BATCH_RUN_R_CLOSE_SESSION_"
 # test_cleanup_leftover_testdata (deletes the files and folders tests leave)
 CLEANUP_SESSION_PREFIX = "CLEANUP_SESSION_"
+# test_project_snapshot_time: the snapshot project's session, created by hand
+# and reused by every run (default of SNAPSHOT_SESSION_NAME). A fixed name,
+# deliberately in none of the prefix lists below, so housekeeping
+# (test_delete_sessions) never quits it.
+SNAPSHOT_SESSION_NAME = "TEST_SNAPSHOT_NFR"
 
 # Every prefix the UI tests name their sessions with, so a teardown that is
 # given no exact names only quits sessions a test could have created, not

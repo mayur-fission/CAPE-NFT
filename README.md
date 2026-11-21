@@ -110,6 +110,93 @@ Each test's docstring has a `Flow:` line (e.g. `login -> launch new session
 | `test_launch_sessions_api_user1.py` | Create / relaunch sessions through the API only |
 | `test_create_session_through_api_and_run_script*.py` | API-created sessions driven in the browser, incl. mixed workloads |
 | `test_launch_existing_session_and_run_r_scripts.py` | Reuse existing API sessions |
+| `test_project_snapshot_time.py` | Project snapshot time (marker `snapshot`, see below) |
+
+### Snapshot timing
+
+`tests/test_project_snapshot_time.py` first creates test data in an existing
+session. It runs `common/make_client_shape.py`, which shapes the files like
+the client's project, from the RStudio console:
+`python3 make_client_shape.py <N>GB /path/to/empty/folder`. It then triggers
+a snapshot of an existing project through the API and times it until the
+status is success, waiting at most 2 h. You create the project and its
+session by hand first.
+
+It runs only when you ask for it, because `pytest.ini` deselects
+`-m snapshot`:
+
+```powershell
+pytest tests/test_project_snapshot_time.py -m snapshot -s
+```
+
+Settings (in `.env` or the environment):
+
+**Required**
+- `SNAPSHOT_PROJECT_DIR`: the project folder on the server, e.g. `/mnt/fsx/CAPE_2026_11_0223`. The project ID comes from its name: `CAPE_2026_11_0223` is project 223.
+- `API_BASE_URL`: the snapshot API's base URL, e.g. `https://<host>`.
+- `TOKEN`: the snapshot API's bearer token, sent as `Authorization: Bearer <TOKEN>`. Keep it in `.env`, which git ignores; a `Bearer ` prefix is stripped. If it is a JWT, the test fails at the start when it has expired and warns when it would expire during the wait. HTTP 401/403 fails at once.
+
+**Optional**
+- `PROJECT_ID`: set it only if the folder name doesn't give the ID. When both are set they must match.
+- `SNAPSHOT_DATA_DIR`: the data folder. Defaults to `<SNAPSHOT_PROJECT_DIR>/snapshot_test_data`. It must be empty or not exist yet; its parent must exist.
+- `SNAPSHOT_SESSION_NAME`: the project's existing session. Defaults to `TEST_SNAPSHOT_NFR` (`common/session_naming_logic.py`).
+
+**Data**
+- `SNAPSHOT_DATA_GB`: decimal GB, default 1. The minimum is 1 and the maximum 1000.
+- `SNAPSHOT_DATA_SEED`: the script's seed (its default is 1). The same size and seed always give the same bytes.
+- `SNAPSHOT_DATA_CLEAN`: set it to `1` to empty `SNAPSHOT_DATA_DIR` before generating. Without it, a folder that isn't empty fails the test.
+- `SNAPSHOT_DATA_SCRIPT`: the local generator script, uploaded before it runs. Default `common/make_client_shape.py`.
+- `SNAPSHOT_DATA_SERVER_SCRIPT`: a generator script already on the server, run as is with nothing uploaded.
+- `SNAPSHOT_SCRIPT_DIR`: where the script is uploaded. Defaults to `~/snapshot_nfr` in the user's home folder. That keeps the script out of the project, so it is not part of the snapshot, and out of the shared `/mnt/fsx` root, which may not be writable. `~` is allowed.
+- The script runs with `python3` (3.9 or later) from the RStudio console: `cd <script folder> && python3 make_client_shape.py <N>GB <data folder>`.
+- `SNAPSHOT_DATA_TIMEOUT_S`: default 1800. Raise it for large sizes.
+
+**Polling**
+- `SNAPSHOT_POLL_INTERVAL_S`: default 10.
+- `SNAPSHOT_TIMEOUT_S`: default 7200.
+- `SNAPSHOT_TEST_TIMEOUT_S`: pytest-timeout. Defaults to the data timeout plus the snapshot timeout plus 900 s (9900 s with the defaults).
+
+**API**
+- `SNAPSHOT_NAME` (default `NFR <run start>`), `SNAPSHOT_COMMENT` (default `TEST`) and `SNAPSHOT_IS_MAJOR` (default `false`): API 1's body, `POST /api/v1/projects/{project_id}/snapshots`.
+- Status (API 2): `GET /api/v1/projects/{project_id}/snapshot-jobs/{snapshot_id}`, polled with the `job_id` from API 1's response. API 1's response looks like `{"job_id": 2389, "project_id": 223, "name": "...", "state": "queued", "status_url": "/api/v1/projects/223/snapshot-jobs/2389"}`. If it includes `status_url`, the test polls that URL instead. The test fails right away if API 1's response shows a different `project_id` or `name` from the ones sent.
+- **Snapshot time** is the end time minus the start time in the status response that reports success. It is calculated as `finished_at` − `started_at` (both ISO UTC, for example `2026-11-20T12:39:24.244240Z`). `requested_at` is ignored. `SNAPSHOT_START_FIELD` and `SNAPSHOT_END_FIELD` can name different fields (dotted for nested ones). Each poll logs the state and the step, for example `processing, step cloning (2/6)`. If the job reports a `finished_at` but its state is unknown, the test fails at once rather than waiting for the timeout. The client-side time from the create call to that poll is recorded as `client_duration_s` alongside it.
+- Snapshot list (API 3): `GET /api/v1/projects/{project_id}/snapshots?page=1&page_size=20&sort=-snapshot_id`. The entries are in `items`, and the response also has `page`, `page_size` and `total`. After success the test finds our entry by `snapshot_id`, taken from the status response's `snapshot.snapshot_id`. If the status response has no snapshot ID, it searches by name. It then checks that `name`, `comment`, `is_major`, `project_id` and `snapshot_id` match what was sent. `snapshot_size`, `snapshot_version` and `commit_id` are recorded in the result. Up to `SNAPSHOT_LIST_MAX_PAGES` pages (default 5) are read, stopping at `total`. The read is tried `SNAPSHOT_LIST_ATTEMPTS` times (default 6), `SNAPSHOT_LIST_RETRY_S` apart (default 10 s), because the status can report `succeeded` while its `listing` is still `generating`.
+- `SNAPSHOT_ID_FIELD`: the field of API 1's response that holds that ID, e.g. `id` or `data.job_id` for a nested one. If it is not set, the first of `job_id`, `jobId`, `snapshot_job_id`, `id`, `snapshot_id`… found is used.
+- `SNAPSHOT_TRIGGER_METHOD`, `SNAPSHOT_TRIGGER_PATH`, `SNAPSHOT_STATUS_PATH` and `SNAPSHOT_DETAILS_PATH`: see `common/snapshot_api.py`.
+
+There are three scenarios, which run in this order (`-k adding`, `-k modifying` or `-k removing` runs one of them):
+1. **Add:** generate `SNAPSHOT_DATA_GB` of data.
+2. **Modify:** overwrite `SNAPSHOT_MODIFY_PERCENT` % of the bytes in place.
+3. **Remove:** delete the data folder.
+
+After each scenario, the test writes these files:
+- `snapshot_time_<scenario>.json` in the run's evidence folder, attached to Allure. It holds:
+  - the snapshot time, with start and end;
+  - the queue wait;
+  - each poll's state and step, and the time spent in each step;
+  - the time from the create call to success;
+  - the API responses.
+- A row in `evidence/snapshot_times.csv`, one per scenario run, so runs can be compared. A snapshot that fails, times out or doesn't appear correctly in the snapshot list also gets a row, with its outcome and the server's error.
+- The report, rebuilt from all runs:
+  - `evidence/snapshot_report.html`, attached to Allure;
+  - `evidence/snapshot_report.md`.
+
+The report covers:
+- an overview and key findings;
+- a summary by scenario: minimum, average and maximum time, queue wait, and data changed per minute;
+- the latest run;
+- every run;
+- the time spent in each step;
+- the size change shown in the snapshot list;
+- the test data;
+- failures;
+- the method.
+
+To rebuild it without a run:
+
+```
+python -m common.snapshot_report
+```
 
 ## Results
 

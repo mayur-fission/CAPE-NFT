@@ -151,6 +151,8 @@ def attach_allure_file(path, name=None):
     attachment_type = {
         ".png": allure.attachment_type.PNG,
         ".csv": allure.attachment_type.CSV,
+        ".json": allure.attachment_type.JSON,
+        ".html": allure.attachment_type.HTML,
     }.get(os.path.splitext(path)[1].lower(), allure.attachment_type.TEXT)
     try:
         allure.attach.file(path, name=name or os.path.basename(path), attachment_type=attachment_type)

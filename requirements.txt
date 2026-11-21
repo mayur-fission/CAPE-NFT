@@ -4,6 +4,8 @@
 pytest==8.3.3
 # Run test files in parallel processes: pytest -n 2 --dist loadfile
 pytest-xdist==3.8.0
+# @pytest.mark.timeout for the long snapshot test (tests/test_project_snapshot_time.py)
+pytest-timeout==2.3.1
 
 # --- Browser automation --------------------------------------------------------
 playwright==1.60.0
