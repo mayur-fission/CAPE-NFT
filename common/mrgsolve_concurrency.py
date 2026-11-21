@@ -34,7 +34,7 @@ from datetime import datetime
 from common.mrgsolve_summary import read_mrgsolve_summary
 from common.perf_report import attach_allure_file, write_csv_report, write_json_report
 from common.rstudio_console_commands import (
-    r_ignored_error_condition, r_string, read_console_value, read_text_file, read_text_lines,
+    is_ignored_r_error, r_ignored_error_condition, r_string, read_console_value, read_text_file, read_text_lines,
 )
 from common.step_log import log_step
 from config.config import evidence_dir
@@ -276,6 +276,11 @@ def parse_timing_csv(text):
                 row[key] = float(row[key])
             except (KeyError, TypeError, ValueError):
                 row[key] = None
+        # Rows written before the wrapper ignored the client script's own errors
+        # (IGNORED_R_ERROR_PATTERNS), or by a workspace on older code, count as ok too.
+        status = row.get("status") or ""
+        if status.startswith("R error:") and is_ignored_r_error(status):
+            row["ignored_error"], row["status"] = status, "ok"
         rows.append(row)
     return rows
 
