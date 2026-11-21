@@ -109,15 +109,15 @@ PROJECT_ID_IN_DIR = project_id_from_path(PROJECT_DIR)
 PROJECT_ID = env("PROJECT_ID") or PROJECT_ID_IN_DIR
 SESSION_NAME = env("SNAPSHOT_SESSION_NAME") or SNAPSHOT_SESSION_NAME
 DATA_DIR = env("SNAPSHOT_DATA_DIR") or (posixpath.join(PROJECT_DIR, "snapshot_test_data") if PROJECT_DIR else None)
-DATA_GB = float(env("SNAPSHOT_DATA_GB", "1"))
+DATA_GB = float(env("SNAPSHOT_DATA_GB") or "1")
 DATA_SEED = optional_int(env("SNAPSHOT_DATA_SEED"))
-DATA_CLEAN = env("SNAPSHOT_DATA_CLEAN", "0") in ("1", "true", "True", "yes")
-POLL_INTERVAL_S = float(env("SNAPSHOT_POLL_INTERVAL_S", "10"))
-SNAPSHOT_TIMEOUT_S = float(env("SNAPSHOT_TIMEOUT_S", "7200"))
-DATA_TIMEOUT_S = int(env("SNAPSHOT_DATA_TIMEOUT_S", "1800"))
+DATA_CLEAN = (env("SNAPSHOT_DATA_CLEAN") or "0") in ("1", "true", "True", "yes")
+POLL_INTERVAL_S = float(env("SNAPSHOT_POLL_INTERVAL_S") or "10")
+SNAPSHOT_TIMEOUT_S = float(env("SNAPSHOT_TIMEOUT_S") or "7200")
+DATA_TIMEOUT_S = int(env("SNAPSHOT_DATA_TIMEOUT_S") or "1800")
 # Whole test: data creation + the snapshot poll + 15 min for login, upload and spare
 TEST_TIMEOUT_S = int(env("SNAPSHOT_TEST_TIMEOUT_S") or DATA_TIMEOUT_S + SNAPSHOT_TIMEOUT_S + 900)
-USER = int(env("SNAPSHOT_USER", "1"))
+USER = int(env("SNAPSHOT_USER") or "1")
 # Launch SESSION_NAME from the New Session dialog when it is not on the session list
 CREATE_SESSION = (env("SNAPSHOT_CREATE_SESSION") or "1") in ("1", "true", "True", "yes")
 # Modify scenario: share of the bytes changed, and the seed picking the files (blank: random, recorded)
@@ -135,6 +135,12 @@ def _check_settings():
     missing = [name for name, value in _REQUIRED.items() if not value]
     if missing:
         pytest.fail("set %s in .env (see the module docstring)" % "; ".join(missing))
+    if DATA_GB < 1:
+        pytest.fail("SNAPSHOT_DATA_GB is %s: make_client_shape.py needs at least 1 (GB)" % DATA_GB)
+    if not 0 < MODIFY_PERCENT <= 100:
+        pytest.fail("SNAPSHOT_MODIFY_PERCENT is %s: use a share of the data above 0 and up to 100" % MODIFY_PERCENT)
+    if POLL_INTERVAL_S <= 0 or SNAPSHOT_TIMEOUT_S <= 0 or DATA_TIMEOUT_S <= 0:
+        pytest.fail("SNAPSHOT_POLL_INTERVAL_S, SNAPSHOT_TIMEOUT_S and SNAPSHOT_DATA_TIMEOUT_S must be above 0")
     if PROJECT_ID_IN_DIR and str(PROJECT_ID) != PROJECT_ID_IN_DIR:
         pytest.fail("PROJECT_ID %s does not match the project folder %s (project %s)"
                     % (PROJECT_ID, PROJECT_DIR, PROJECT_ID_IN_DIR))

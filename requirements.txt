@@ -1,4 +1,5 @@
 # Install: pip install -r requirements.txt, then: playwright install chromium
+# Versions are the ones this suite is run and tested with (Python 3.15)
 
 # --- Test runner ---------------------------------------------------------------
 pytest==8.3.3
@@ -31,7 +32,7 @@ allure-pytest==2.13.5
 # 8+. They are not pip packages - see README, Setup.
 # Session time charts (common/session_time_report.py; optional - skipped
 # without them); tzdata gives Windows the IANA timezones
-pandas==2.3.3
-numpy==2.3.4
-matplotlib==3.10.7
+pandas==3.1.1
+numpy==2.5.5
+matplotlib==3.11.2
 tzdata==2025.2

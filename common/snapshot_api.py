@@ -44,18 +44,18 @@ from common.step_log import log_step
 from config.config import EVIDENCE_ROOT, RUN_STAMP, env, evidence_dir
 
 # -- endpoints (status/details are placeholders, see TODO above) ---------
-TRIGGER_METHOD = env("SNAPSHOT_TRIGGER_METHOD", "POST")
-TRIGGER_PATH = env("SNAPSHOT_TRIGGER_PATH", "/api/v1/projects/{project_id}/snapshots")
-STATUS_PATH = env("SNAPSHOT_STATUS_PATH", "/api/v1/projects/{project_id}/snapshot-jobs/{snapshot_id}")
-LIST_PATH = env("SNAPSHOT_LIST_PATH", "/api/v1/projects/{project_id}/snapshots")
-LIST_PAGE_SIZE = int(env("SNAPSHOT_LIST_PAGE_SIZE", "20"))
-LIST_SORT = env("SNAPSHOT_LIST_SORT", "-snapshot_id")
+TRIGGER_METHOD = env("SNAPSHOT_TRIGGER_METHOD") or "POST"
+TRIGGER_PATH = env("SNAPSHOT_TRIGGER_PATH") or "/api/v1/projects/{project_id}/snapshots"
+STATUS_PATH = env("SNAPSHOT_STATUS_PATH") or "/api/v1/projects/{project_id}/snapshot-jobs/{snapshot_id}"
+LIST_PATH = env("SNAPSHOT_LIST_PATH") or "/api/v1/projects/{project_id}/snapshots"
+LIST_PAGE_SIZE = int(env("SNAPSHOT_LIST_PAGE_SIZE") or "20")
+LIST_SORT = env("SNAPSHOT_LIST_SORT") or "-snapshot_id"
 # Pages of the list searched for our snapshot (newest first, so it is on page 1)
-LIST_MAX_PAGES = int(env("SNAPSHOT_LIST_MAX_PAGES", "5"))
+LIST_MAX_PAGES = int(env("SNAPSHOT_LIST_MAX_PAGES") or "5")
 # Reads of the list, LIST_RETRY_S apart, before "not in the list" fails
 # API 2 can say "succeeded" while its "listing" is still "generating", so the list may lag behind
-LIST_ATTEMPTS = int(env("SNAPSHOT_LIST_ATTEMPTS", "6"))
-LIST_RETRY_S = float(env("SNAPSHOT_LIST_RETRY_S", "10"))
+LIST_ATTEMPTS = int(env("SNAPSHOT_LIST_ATTEMPTS") or "6")
+LIST_RETRY_S = float(env("SNAPSHOT_LIST_RETRY_S") or "10")
 # Where a list response keeps its entries (or the response is the list itself)
 LIST_ITEMS_FIELDS = ("items", "results", "data", "snapshots", "content", "records")
 NAME_FIELDS = ("name", "snapshot_name")
@@ -70,8 +70,8 @@ PROJECT_FOLDER_RE = re.compile(r"CAPE_\d{4}_\d{2}_(\d+)", re.IGNORECASE)
 # -- API 1 body ----------------------------------------------------------------
 # name: SNAPSHOT_NAME, else "NFR <run start>" (unique per run)
 SNAPSHOT_NAME = env("SNAPSHOT_NAME") or "NFR %s" % RUN_STAMP
-SNAPSHOT_COMMENT = env("SNAPSHOT_COMMENT", "TEST")
-SNAPSHOT_IS_MAJOR = env("SNAPSHOT_IS_MAJOR", "false").strip().lower() in ("1", "true", "yes")
+SNAPSHOT_COMMENT = env("SNAPSHOT_COMMENT") or "TEST"
+SNAPSHOT_IS_MAJOR = (env("SNAPSHOT_IS_MAJOR") or "false").strip().lower() in ("1", "true", "yes")
 
 # -- response fields (first name found wins) -----------------------------
 # API 2 is .../snapshot-jobs/<id>, so a job id is preferred over a snapshot id
@@ -107,7 +107,7 @@ FAILED_STATUSES = frozenset({"failed", "failure", "error", "cancelled", "cancele
 # A status poll that fails (network, 5xx such as a 502 from the gateway while the backend
 # restarts) is retried at the next interval; this many failures in a row fail the wait
 # (30 x 10s = 5 min). The snapshot keeps running on the server meanwhile.
-MAX_POLL_ERRORS = int(env("SNAPSHOT_MAX_POLL_ERRORS", "30"))
+MAX_POLL_ERRORS = int(env("SNAPSHOT_MAX_POLL_ERRORS") or "30")
 REQUEST_TIMEOUT_S = 60
 
 # Shared by every run, so runs can be compared (one row per run)
