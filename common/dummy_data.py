@@ -156,7 +156,9 @@ def create_test_data(page, data_dir: str, size_gb: float, timeout_ms: int = 1800
     script_dir = script_dir or env("SNAPSHOT_SCRIPT_DIR") or DEFAULT_SCRIPT_DIR
     script = generator_on_server(page, script_dir, server_script)
 
-    command = "cd %s && %s %s %gGB %s" % (shlex.quote(posixpath.dirname(script)), PYTHON,
+    # -u: unbuffered, so the log keeps the order things happened in (buffered, the plan table
+    # was written after a "refused: ..." error and the error never reached the last lines)
+    command = "cd %s && %s -u %s %gGB %s" % (shlex.quote(posixpath.dirname(script)), PYTHON,
                                          shlex.quote(posixpath.basename(script)), size_gb, shlex.quote(data_dir))
     if seed is not None:
         command += " --seed %d" % seed
@@ -167,8 +169,12 @@ def create_test_data(page, data_dir: str, size_gb: float, timeout_ms: int = 1800
     log_step("Generating %g GB of test data: $ %s  (output in %s)", size_gb, command, log_path)
     quoted_log = shlex.quote(log_path)
     started = time.monotonic()
-    tail = _shell(page, "%s > %s 2>&1; st=$?; tail -n 3 %s | cut -c1-200; exit $st"
-                  % (command, quoted_log, quoted_log), "test data generation (log: %s)" % log_path,
+    # On failure the script's own error lines (refused: / failed: / INCOMPLETE / interrupted)
+    # come first, so the test's error says why - e.g. not enough free space - not just the plan.
+    tail = _shell(page, "%s > %s 2>&1; st=$?; if [ $st -ne 0 ]; then grep -E "
+                        "'^(refused|failed|INCOMPLETE|interrupted)' %s | tail -n 5 | cut -c1-300; fi; "
+                        "tail -n 3 %s | cut -c1-200; exit $st"
+                  % (command, quoted_log, quoted_log, quoted_log), "test data generation (log: %s)" % log_path,
                   timeout_ms=timeout_ms)
     seconds = round(time.monotonic() - started, 1)
     log_step("Generator finished in %.1fs: %s", seconds, tail)
