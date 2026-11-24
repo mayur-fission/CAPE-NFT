@@ -79,6 +79,51 @@ def run_timed_console_command_repeatedly(page, session_name, command, timeout_ms
     return elapsed
 
 
+# Text a script prints once it has really started its work - the mrgsolve load test's banner
+# (rfiles/run_mrgsolve*.R: PID, run ID, subjects, target duration, start time). When it shows in a
+# console after the command was submitted, that console is screenshotted as
+# script_started_<session>.png (always, not only with EVIDENCE_SCREENSHOTS=1) and attached to Allure.
+START_BANNERS = ("mrgsolve CONCURRENT-SESSION LOAD TEST",)
+# Watch for the banner this long after the start; other scripts never print it, so after this the
+# console is no longer searched for it
+START_BANNER_WAIT_S = 600
+
+
+def _start_banner_count(page):
+    """How many times a START_BANNERS text is in the console (0 if it cannot be read)."""
+    try:
+        return int(page.evaluate(
+            """([selector, banners]) => {
+                const el = document.querySelector(selector);
+                const text = el ? el.textContent : "";
+                return banners.reduce((n, b) => n + (text.split(b).length - 1), 0);
+            }""",
+            [locators.CONSOLE_OUTPUT_SELECTOR, list(START_BANNERS)],
+        ) or 0)
+    except Exception:
+        return 0
+
+
+def _capture_start_banner(page, record, what=None):
+    """Screenshot the console once the script's start banner is new in it
+    (more of them than when the command was submitted); returns True when
+    the run no longer needs checking (captured, or past START_BANNER_WAIT_S)."""
+    if record.get("start_banner_s") is not None or "_banner_base" not in record:
+        return True
+    elapsed = time.time() - record["started"]
+    if elapsed > START_BANNER_WAIT_S:
+        record.pop("_banner_base", None)
+        return True
+    if _start_banner_count(page) <= record["_banner_base"]:
+        return False
+    record["start_banner_s"] = round(elapsed, 1)
+    record.pop("_banner_base", None)
+    log_step("%s started successfully in session %s (start banner after %.1fs) - screenshot "
+             "script_started_%s.png", what or "The script", record["session_name"], elapsed, record["session_name"])
+    save_screenshot(page, "script_started_%s.png" % record["session_name"], always=True)
+    return True
+
+
 def submit_in_each(ready, command, what=None):
     """Submit `command` without waiting in each (page, record, context) of
     `ready`, setting record["started"], and screenshot each console as
@@ -90,6 +135,8 @@ def submit_in_each(ready, command, what=None):
     pending = []
     for page, record, context in ready:
         try:
+            # start banners already in the console (an earlier run): only a new one counts
+            record["_banner_base"] = _start_banner_count(page)
             marker, record["started"] = submit_console_command(page, command)
             pending.append((page, marker, record, context))
             if what:
@@ -138,6 +185,7 @@ def wait_for_console_runs(pending, timeout_ms, poll_interval_ms=500, on_done=Non
     finishes, errors or reaches `timeout_ms`, so several tabs run at once.
 
     Flow: poll every console -> record end time / "R error: ..." / "timed out"
+          (and screenshot a script's start banner, START_BANNERS, as soon as it shows)
           -> (all done) screenshots + on_done / on_timeout per tab
 
     The loop only records end times; screenshots and on_done (seconds each,
@@ -147,6 +195,7 @@ def wait_for_console_runs(pending, timeout_ms, poll_interval_ms=500, on_done=Non
     """
     what_ = what or "The command"
     pending = list(pending)
+    records = [item[2] for item in pending]
     finished = []  # (page, record, context) of finished commands, handled after the loop
     timed_out = []
     while pending:
@@ -178,7 +227,15 @@ def wait_for_console_runs(pending, timeout_ms, poll_interval_ms=500, on_done=Non
                 pending.remove(item)
                 log_step("Could not check the console of session %s: %s", name, exc)
                 continue
+            if not done and "_banner_base" in record:
+                # the script's start banner (START_BANNERS): screenshot it as soon as it shows
+                try:
+                    _capture_start_banner(page, record, what)
+                except Exception as exc:
+                    record.pop("_banner_base", None)
+                    log_step("Could not screenshot the start of session %s: %s", name, exc)
             if done:
+                record.pop("_banner_base", None)
                 record["ended"], record["status"] = time.time(), "ok"
                 pending.remove(item)
                 if what:
@@ -194,6 +251,8 @@ def wait_for_console_runs(pending, timeout_ms, poll_interval_ms=500, on_done=Non
             on_poll()
         if pending:
             pending[0][0].wait_for_timeout(poll_interval_ms)
+    for record in records:
+        record.pop("_banner_base", None)  # internal: the start banner watch is over
 
     for page, record, context in finished:
         save_screenshot(page, "console_output_%s.png" % record["session_name"])

@@ -25,14 +25,36 @@ def find_matching_names(page, folder, pattern, timeout_ms=30000):
     return sorted(name for name in value.split(_NAME_SEPARATOR) if name)
 
 
+# RStudio commands that bring a hidden Files pane back: end a pane zoom (View > Panes > Show All
+# Panes - a zoomed console or editor hides the other panes) and "Show Files" (Ctrl+5, which also
+# restores a minimized pane). Each runs only if this RStudio has it.
+_SHOW_FILES_PANE = (
+    "if (exists('.rs.api.executeCommand')) invisible(lapply(c('layoutEndZoom', 'activateFiles'), "
+    "function(cmd) tryCatch(.rs.api.executeCommand(cmd, quiet = TRUE), error = function(e) NULL)))"
+)
+
+
 def open_folder_in_files_pane(page, folder, timeout_ms=30000):
-    """Show `folder` in the Files pane (Files tab in front)."""
+    """Show `folder` in the Files pane (Files tab in front). The pane is
+    brought back first when the session's layout hides it (a zoomed or
+    minimized pane): its tab is then in the page but not visible, and a click
+    on it would wait in vain."""
+    run_console_command(page, _SHOW_FILES_PANE, timeout_ms=timeout_ms)
     run_console_command(page, "if (exists('.rs.api.filesPaneNavigate')) .rs.api.filesPaneNavigate(%s)"
                         % r_string(folder), timeout_ms=timeout_ms)
-    tab = page.locator(locators.FILES_TAB_SELECTOR)
-    if tab.count() > 0:
-        tab.first.click()
-    page.locator(locators.FILES_PANEL_SELECTOR).wait_for(state="visible", timeout=timeout_ms)
+    tab = page.locator(locators.FILES_TAB_SELECTOR).first
+    try:
+        tab.wait_for(state="visible", timeout=10000)
+        tab.click(timeout=10000)
+    except Exception:
+        pass  # the tab stays hidden in some layouts; what matters is the panel below
+    try:
+        page.locator(locators.FILES_PANEL_SELECTOR).wait_for(state="visible", timeout=timeout_ms)
+    except Exception as exc:
+        save_screenshot(page, "files_pane_hidden.png", always=True)
+        raise RuntimeError("the Files pane is not visible in this session, even after Show All Panes and "
+                           "Show Files - open the session, use View > Panes > Show All Panes, then run the "
+                           "test again (screenshot files_pane_hidden.png): %s" % exc) from exc
 
 
 def _file_row(page, name):
